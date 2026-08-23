@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}게시판{% endblock %}
+
+{% block content %}
+    <h1>게시판</h1>
+    <div class="nav">
+        <a href="/new">✍️ 글쓰기</a>
+    </div>
+
+    <form method="GET" action="/" class="search-form">
+        <input type="text" name="search" placeholder="제목으로 검색..." value="{{ search_query }}">
+        <button type="submit">🔍 검색</button>
+    </form>
+
+    {% if search_query %}
+    <div class="search-result">
+        "<strong>{{ search_query }}</strong>" 검색 결과 ({{ posts|length }}개)
+        <a href="/">초기화</a>
+    </div>
+    {% endif %}
+
+    <ul>
+        {% for post in posts %}
+        <li>
+            <a href="/posts/{{ post.id }}">{{ post.title }}</a>
+            <div class="post-meta">{{ post.created_at }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+{% endblock %}
