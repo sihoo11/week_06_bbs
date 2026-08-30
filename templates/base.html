@@ -5,6 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}게시판{% endblock %}</title>
     <style>
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(102, 126, 234, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(102, 126, 234, 0);
+            }
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -25,6 +68,7 @@
             border-radius: 12px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
             padding: 40px;
+            animation: fadeIn 0.6s ease-out;
         }
 
         h1 {
@@ -32,6 +76,7 @@
             margin-bottom: 30px;
             font-size: 28px;
             font-weight: 600;
+            animation: slideInLeft 0.5s ease-out;
         }
 
         .nav {
@@ -51,30 +96,39 @@
             font-size: 14px;
             border: none;
             cursor: pointer;
-            transition: background 0.3s ease;
+            transition: all 0.3s ease;
+            animation: slideInLeft 0.5s ease-out;
         }
 
         .nav a:hover, .nav button:hover {
             background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
 
         .nav .back-btn {
             background: #999;
+            animation: slideInLeft 0.5s ease-out;
         }
 
         .nav .back-btn:hover {
             background: #666;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(153, 153, 153, 0.4);
         }
 
         .nav .delete-btn {
             background: #e74c3c;
+            animation: slideInLeft 0.5s ease-out 0.05s backwards;
         }
 
         .nav .delete-btn:hover {
             background: #c0392b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(231, 76, 60, 0.4);
         }
 
-        input[type="text"], textarea {
+        input[type="text"], textarea, input[type="password"] {
             width: 100%;
             padding: 12px;
             margin-bottom: 16px;
@@ -82,13 +136,15 @@
             border-radius: 6px;
             font-size: 14px;
             font-family: inherit;
-            transition: border-color 0.3s ease;
+            transition: all 0.3s ease;
+            animation: fadeIn 0.5s ease-out;
         }
 
-        input[type="text"]:focus, textarea:focus {
+        input[type="text"]:focus, textarea:focus, input[type="password"]:focus {
             outline: none;
             border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+            transform: translateY(-2px);
         }
 
         textarea {
@@ -106,11 +162,19 @@
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.3s ease;
+            transition: all 0.3s ease;
+            animation: fadeIn 0.5s ease-out;
+            position: relative;
         }
 
         button[type="submit"]:hover {
             background: #764ba2;
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button[type="submit"]:active {
+            transform: translateY(-1px);
         }
 
         ul {
@@ -120,11 +184,21 @@
         ul li {
             padding: 16px;
             border-bottom: 1px solid #eee;
-            transition: background 0.3s ease;
+            transition: all 0.3s ease;
+            animation: slideInLeft 0.4s ease-out backwards;
         }
+
+        ul li:nth-child(1) { animation-delay: 0.05s; }
+        ul li:nth-child(2) { animation-delay: 0.1s; }
+        ul li:nth-child(3) { animation-delay: 0.15s; }
+        ul li:nth-child(4) { animation-delay: 0.2s; }
+        ul li:nth-child(5) { animation-delay: 0.25s; }
+        ul li:nth-child(n+6) { animation-delay: 0.3s; }
 
         ul li:hover {
             background: #f8f9fa;
+            transform: translateX(4px);
+            box-shadow: -3px 0 0 #667eea;
         }
 
         ul li:last-child {
@@ -137,6 +211,7 @@
             font-weight: 500;
             display: block;
             margin-bottom: 6px;
+            transition: color 0.3s ease;
         }
 
         ul li a:hover {
@@ -155,12 +230,14 @@
             color: #333;
             word-break: break-word;
             white-space: pre-wrap;
+            animation: fadeIn 0.5s ease-out 0.2s backwards;
         }
 
         .post-header {
             margin-bottom: 20px;
             padding-bottom: 20px;
             border-bottom: 2px solid #eee;
+            animation: slideInLeft 0.5s ease-out;
         }
 
         .post-actions {
@@ -169,10 +246,19 @@
             margin-top: 20px;
             padding-top: 20px;
             border-top: 2px solid #eee;
+            animation: fadeIn 0.5s ease-out 0.3s backwards;
         }
 
         .post-actions form {
             display: inline;
+        }
+
+        .post-actions a, .post-actions button {
+            transition: all 0.3s ease;
+        }
+
+        .post-actions a:hover {
+            transform: translateY(-2px);
         }
 
         .search-form {
@@ -180,6 +266,8 @@
             gap: 8px;
             margin-bottom: 20px;
             width: 100%;
+            animation: fadeIn 0.5s ease-out;
+            flex-wrap: nowrap;
         }
 
         .search-form input[type="text"] {
@@ -190,24 +278,35 @@
             border-radius: 8px;
             font-size: 18px;
             height: 70px;
-            min-width: 300px;
+            min-width: 0;
+            transition: all 0.3s ease;
+        }
+
+        .search-form input[type="text"]:focus {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
         }
 
         .search-form button {
-            padding: 0 24px;
+            padding: 0 8px;
             background: #667eea;
             color: white;
             border: none;
             border-radius: 8px;
-            font-size: 14px;
+            font-size: 12px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.3s ease;
+            transition: all 0.3s ease;
             white-space: nowrap;
+            flex-shrink: 0;
+            height: 70px;
+            width: 65px;
         }
 
         .search-form button:hover {
             background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
 
         .search-result {
@@ -218,6 +317,13 @@
             border-radius: 4px;
             font-size: 14px;
             color: #333;
+            animation: fadeIn 0.5s ease-out;
+            transition: all 0.3s ease;
+        }
+
+        .search-result:hover {
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+            transform: translateX(4px);
         }
 
         .search-result a {
@@ -225,14 +331,86 @@
             color: #667eea;
             text-decoration: none;
             font-weight: 600;
+            transition: color 0.3s ease;
         }
 
         .search-result a:hover {
+            color: #764ba2;
             text-decoration: underline;
+        }
+
+        .auth-nav {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            z-index: 100;
+        }
+
+        .auth-nav form {
+            display: inline;
+        }
+
+        .auth-nav button {
+            padding: 8px 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .auth-nav button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .auth-nav a {
+            display: inline-block;
+            padding: 8px 14px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: all 0.3s ease;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .auth-nav a:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .username {
+            padding: 8px 14px;
+            color: #333;
+            font-size: 13px;
+            background: #f0f4ff;
+            border-radius: 6px;
+            animation: fadeIn 0.5s ease-out;
+            font-weight: 500;
         }
     </style>
 </head>
 <body>
+    <div class="auth-nav">
+        {% if session.get("user_id") %}
+            <span class="username">{{ session.get("username") }}</span>
+            <form method="POST" action="/logout">
+                <button type="submit">로그아웃</button>
+            </form>
+        {% else %}
+            <a href="/login">로그인</a>
+            <a href="/signup">회원가입</a>
+        {% endif %}
+    </div>
     <div class="container">
         {% block content %}{% endblock %}
     </div>

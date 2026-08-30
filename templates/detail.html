@@ -16,10 +16,12 @@
         {{ post.content }}
     </div>
 
+    {% if session.get("user_id") == post.user_id %}
     <div class="post-actions">
         <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
         <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
             <button type="submit" class="delete-btn">🗑️ 삭제</button>
         </form>
     </div>
+    {% endif %}
 {% endblock %}

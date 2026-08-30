@@ -1,15 +1,17 @@
 {% extends "base.html" %}
 
-{% block title %}새 글 쓰기{% endblock %}
+{% block title %}새 글작성{% endblock %}
 
 {% block content %}
-    <h1>새 글 쓰기</h1>
     <div class="nav">
         <a href="/" class="back-btn">← 목록으로</a>
     </div>
-    <form method="POST" action="/posts">
-        <input type="text" name="title" placeholder="제목" required>
-        <textarea name="content" placeholder="내용" required></textarea>
+
+    <h1>새 글 작성</h1>
+
+    <form method="POST" action="/new">
+        <input type="text" name="title" placeholder="제목을 입력하세요" required>
+        <textarea name="content" placeholder="내용을 입력하세요" required></textarea>
         <button type="submit">저장</button>
     </form>
 {% endblock %}
