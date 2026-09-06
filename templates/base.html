@@ -431,7 +431,7 @@
             </div>
             <div class="nav-right-top">
                 {% if session.get("user_id") %}
-                    <span class="username">{{ session.get("username") }}</span>
+                    <span class="username">{{ session.get("username") }}님</span>
                     <form method="POST" action="/logout">
                         <button type="submit">로그아웃</button>
                     </form>
