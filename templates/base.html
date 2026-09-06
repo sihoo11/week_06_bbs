@@ -408,7 +408,9 @@
 <body>
     <div class="container">
         <div class="nav-header-top">
-            <div class="nav-left-top"></div>
+            <div class="nav-left-top">
+                {% block nav_left %}{% endblock %}
+            </div>
             <div class="nav-right-top">
                 {% if session.get("user_id") %}
                     <span class="username">{{ session.get("username") }}</span>
