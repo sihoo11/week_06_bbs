@@ -29,11 +29,14 @@ def index():
 def detail(post_id):
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    author = None
     user = None
+    if post:
+        author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
     if "user_id" in session:
         user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
-    return render_template('detail.html', post=post, user=user)
+    return render_template('detail.html', post=post, author=author, user=user)
 
 @app.route("/new", methods=["GET", "POST"])
 def new():
