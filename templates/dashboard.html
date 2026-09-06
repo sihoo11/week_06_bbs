@@ -229,30 +229,6 @@
       animation: slideUp 1.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
     }
 
-    tbody tr:nth-child(1) .bar-fill {
-      animation-delay: 0.2s;
-    }
-
-    tbody tr:nth-child(2) .bar-fill {
-      animation-delay: 0.4s;
-    }
-
-    tbody tr:nth-child(3) .bar-fill {
-      animation-delay: 0.6s;
-    }
-
-    tbody tr:nth-child(4) .bar-fill {
-      animation-delay: 0.8s;
-    }
-
-    tbody tr:nth-child(5) .bar-fill {
-      animation-delay: 1s;
-    }
-
-    tbody tr:nth-child(n+6) .bar-fill {
-      animation-delay: 1.2s;
-    }
-
     .pm10-value {
       font-weight: 600;
       min-width: 30px;
@@ -338,39 +314,34 @@
   <script>
     function animateCountUp() {
       const elements = document.querySelectorAll('.pm10-value');
+      const duration = 1500; // 1.5 seconds
+      const startTime = Date.now();
 
-      elements.forEach((el, index) => {
-        const finalValue = parseInt(el.getAttribute('data-value'));
-        const delay = (index * 200 + 200); // 200ms offset per row + 200ms initial delay
+      const animate = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / duration, 1);
 
-        setTimeout(() => {
-          let currentValue = 0;
-          const duration = 1500; // 1.5 seconds
-          const startTime = Date.now();
-          const updateInterval = 30; // Update every 30ms for smooth animation
+        // Easing function: cubic-bezier(0.34, 1.56, 0.64, 1)
+        const easeProgress = progress < 0.5
+          ? 2 * progress * progress
+          : -1 + (4 - 2 * progress) * progress;
 
-          const animate = () => {
-            const elapsed = Date.now() - startTime;
-            const progress = Math.min(elapsed / duration, 1);
+        elements.forEach((el) => {
+          const finalValue = parseInt(el.getAttribute('data-value'));
+          const currentValue = Math.round(easeProgress * finalValue);
+          el.textContent = currentValue;
+        });
 
-            // Easing function: cubic-bezier(0.34, 1.56, 0.64, 1)
-            const easeProgress = progress < 0.5
-              ? 2 * progress * progress
-              : -1 + (4 - 2 * progress) * progress;
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          elements.forEach((el) => {
+            el.textContent = parseInt(el.getAttribute('data-value'));
+          });
+        }
+      };
 
-            currentValue = Math.round(easeProgress * finalValue);
-            el.textContent = currentValue;
-
-            if (progress < 1) {
-              requestAnimationFrame(animate);
-            } else {
-              el.textContent = finalValue;
-            }
-          };
-
-          animate();
-        }, delay);
-      });
+      animate();
     }
 
     // Start animation when page loads
