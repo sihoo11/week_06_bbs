@@ -4,6 +4,7 @@ import os
 import sqlite3
 from pathlib import Path
 from flask import Flask, request, render_template, redirect, url_for
+from opendata import fetch_air_quality
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
@@ -181,11 +182,16 @@ def create_table() :
     except sqlite3.OperationalError :
         pass
 
-    # sihooissue11을 관리자로 설정
     conn.execute("UPDATE users SET is_admin = 1 WHERE username = 'sihooissue11'")
 
     conn.commit()
     conn.close()
+
+@app.route("/dashboard")
+def dashboard():
+    sido = request.args.get("sido", "서울")
+    rows, source = fetch_air_quality(sido)
+    return render_template('dashboard.html', rows=rows, sido=sido, source=source)
 
 if __name__ == '__main__' :
     create_table()

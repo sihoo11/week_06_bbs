@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>공공데이터 대시보드</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background: #f9fafb;
+      color: #1f2937;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+      padding: 40px;
+      animation: fadeIn 0.6s ease-out;
+    }
+
+    .nav-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .nav-left {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .nav-right {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .nav-left a, .nav-left span, .nav-right a, .nav-right button, .nav-right span {
+      display: inline-block;
+      padding: 8px 12px;
+      font-size: 13px;
+      text-decoration: none;
+      color: #1f2937;
+      transition: all 0.3s ease;
+    }
+
+    .nav-left a, .nav-right a {
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .nav-left a:hover, .nav-right a:hover {
+      background: #e5e7eb;
+      border-color: #d1d5db;
+    }
+
+    .nav-right button {
+      padding: 8px 12px;
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .nav-right button:hover {
+      background: #fecaca;
+      border-color: #fca5a5;
+    }
+
+    .nav-right form {
+      display: inline;
+    }
+
+    .username {
+      color: #1f2937;
+      font-weight: 500;
+      font-size: 13px;
+    }
+
+    h1 {
+      font-size: 28px;
+      color: #1f2937;
+      margin-bottom: 8px;
+      font-weight: 600;
+      animation: fadeIn 0.5s ease-out;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 30px;
+      animation: fadeIn 0.5s ease-out;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .badge.live {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .badge.sample {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .controls {
+      margin-bottom: 30px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      animation: fadeIn 0.5s ease-out;
+    }
+
+    .controls label {
+      font-weight: 500;
+      color: #374151;
+      font-size: 14px;
+    }
+
+    select {
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      background: #f9fafb;
+      color: #1f2937;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-family: inherit;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+      background: white;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      animation: fadeIn 0.5s ease-out 0.1s backwards;
+    }
+
+    th {
+      background: #f9fafb;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #374151;
+      border-bottom: 2px solid #e5e7eb;
+      font-size: 14px;
+    }
+
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      color: #1f2937;
+      font-size: 14px;
+    }
+
+    tbody tr:hover {
+      background: #f9fafb;
+      transition: all 0.3s ease;
+    }
+
+    .bar-track {
+      background: #e5e7eb;
+      border-radius: 4px;
+      height: 14px;
+      width: 100%;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      background: #3b82f6;
+      height: 14px;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+
+    .empty-message {
+      text-align: center;
+      padding: 40px 20px;
+      color: #6b7280;
+      font-size: 14px;
+      animation: fadeIn 0.5s ease-out;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav-header">
+      <div class="nav-left">
+        <a href="/">← 게시판</a>
+      </div>
+      <div class="nav-right">
+        {% if session.get("username") %}
+          <span class="username">{{ session.username }}님</span>
+          <form method="POST" action="/logout">
+            <button type="submit">로그아웃</button>
+          </form>
+        {% else %}
+          <a href="/login">로그인</a>
+          <a href="/signup">회원가입</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="page-header">
+      <div>
+        <h1>미세먼지 대시보드</h1>
+      </div>
+      <span class="badge {{ source }}">{{ "실시간" if source == "live" else "샘플 데이터" }}</span>
+    </div>
+    <div class="controls">
+      <label for="sido" style="font-weight: 500; color: #374151;">지역 선택:</label>
+      <form method="GET" action="/dashboard" style="display: inline;">
+        <select id="sido" name="sido" onchange="this.form.submit()">
+          {% for name in ["인천", "서울", "부산", "경기", "대구"] %}
+            <option value="{{ name }}" {{ "selected" if name == sido else "" }}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>측정소</th>
+          <th>미세먼지(PM10)</th>
+          <th>등급</th>
+          <th style="width: 30%;">수준</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.station }}</td>
+          <td>{{ row.pm10 }}</td>
+          <td><strong>{{ row.grade }}</strong></td>
+          <td>
+            <div class="bar-track">
+              <div class="bar-fill" style="width: {{ row.pm10 }}%"></div>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="4" style="text-align: center; padding: 40px;">
+            <div class="empty-message">데이터가 없습니다.</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
