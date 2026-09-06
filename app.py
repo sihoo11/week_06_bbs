@@ -58,10 +58,14 @@ def edit(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
 
-    if post["user_id"] != session["user_id"]:
-        return "본인만 수정 가능합니다.", 403
+    is_owner = post["user_id"] == session["user_id"]
+    is_admin = user and user["is_admin"]
+
+    if not (is_owner or is_admin):
+        return "본인 또는 관리자만 수정 가능합니다.", 403
 
     if request.method == "POST":
         title = request.form["title"]
@@ -81,10 +85,14 @@ def delete_post(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
 
-    if post["user_id"] != session["user_id"]:
+    is_owner = post["user_id"] == session["user_id"]
+    is_admin = user and user["is_admin"]
+
+    if not (is_owner or is_admin):
         conn.close()
-        return "본인만 삭제 가능합니다.", 403
+        return "본인 또는 관리자만 삭제 가능합니다.", 403
 
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
     conn.commit()
@@ -147,6 +155,7 @@ def create_table() :
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -164,6 +173,14 @@ def create_table() :
         conn.execute("ALTER TABLE posts ADD COLUMN user_id INTEGER")
     except sqlite3.OperationalError :
         pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    except sqlite3.OperationalError :
+        pass
+
+    # sihooissue11을 관리자로 설정
+    conn.execute("UPDATE users SET is_admin = 1 WHERE username = 'sihooissue11'")
+
     conn.commit()
     conn.close()
 
