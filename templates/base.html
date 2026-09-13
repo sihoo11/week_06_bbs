@@ -991,7 +991,7 @@
             <div class="nav-right-top">
                 {% if session.get("user_id") %}
                     <span class="username">{{ session.get("username") }}님</span>
-                    <a href="/change-password">🔐 비밀번호 변경</a>
+                    <a href="/account">⚙️ 계정관리</a>
                     <form method="POST" action="/logout">
                         <button type="submit">로그아웃</button>
                     </form>

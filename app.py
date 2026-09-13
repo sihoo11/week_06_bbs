@@ -176,6 +176,12 @@ def logout():
     session.clear()
     return redirect('/')
 
+@app.route('/account')
+def account():
+    if "user_id" not in session:
+        return redirect('/login')
+    return render_template('account.html')
+
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password():
     if "user_id" not in session:

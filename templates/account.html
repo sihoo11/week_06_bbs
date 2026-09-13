@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}계정관리{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 목록으로</a>
+{% endblock %}
+
+{% block content %}
+    <h1>⚙️ 계정관리</h1>
+
+    <ul>
+        <li>
+            <a href="/change-password">🔐 비밀번호 변경</a>
+        </li>
+        <li>
+            <a href="/dashboard">📊 대시보드</a>
+        </li>
+    </ul>
+{% endblock %}
