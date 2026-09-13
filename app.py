@@ -230,6 +230,17 @@ def is_room_member(conn, room_id, username):
     ).fetchone()
     return member is not None
 
+def is_timed_out(conn, room_id, username):
+    row = conn.execute("""
+        SELECT 1 FROM chat_room_members
+        WHERE room_id = ? AND username = ?
+          AND timeout_until IS NOT NULL
+          AND timeout_until > datetime('now', 'localtime')
+    """, (room_id, username)).fetchone()
+    return row is not None
+
+TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
+
 def create_tables():
     conn = get_db()
     conn.execute("""
@@ -284,6 +295,7 @@ def create_tables():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             room_id INTEGER NOT NULL,
             username TEXT NOT NULL,
+            timeout_until TEXT,
             UNIQUE(room_id, username)
         )
     """)
@@ -293,6 +305,7 @@ def create_tables():
         "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
         "ALTER TABLE posts ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_messages ADD COLUMN room_id INTEGER",
+        "ALTER TABLE chat_room_members ADD COLUMN timeout_until TEXT",
     ]:
         try:
             conn.execute(statement)
@@ -557,10 +570,14 @@ def room_members(room_id):
         conn.close()
         return redirect(url_for("room_members", room_id=room_id))
 
-    members = conn.execute(
-        "SELECT username FROM chat_room_members WHERE room_id = ? ORDER BY id ASC",
-        (room_id,),
-    ).fetchall()
+    members = conn.execute("""
+        SELECT username, timeout_until,
+               CASE WHEN timeout_until IS NOT NULL AND timeout_until > datetime('now', 'localtime')
+                    THEN 1 ELSE 0 END AS is_timed_out
+        FROM chat_room_members
+        WHERE room_id = ?
+        ORDER BY id ASC
+    """, (room_id,)).fetchall()
     conn.close()
     return render_template("room_members.html", room=room, members=members)
 
@@ -587,6 +604,67 @@ def remove_room_member(room_id, username):
 
     conn.execute(
         "DELETE FROM chat_room_members WHERE room_id = ? AND username = ?",
+        (room_id, username),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/members/<username>/timeout", methods=["POST"])
+def timeout_room_member(room_id, username):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+
+    if username == room["created_by"]:
+        conn.close()
+        return "방을 만든 사람은 타임아웃할 수 없습니다.", 400
+
+    duration = request.form.get("duration")
+    modifier = TIMEOUT_DURATIONS.get(duration)
+    if modifier is None:
+        conn.close()
+        return "잘못된 시간입니다.", 400
+
+    conn.execute(
+        f"UPDATE chat_room_members SET timeout_until = datetime('now', 'localtime', '{modifier}') "
+        "WHERE room_id = ? AND username = ?",
+        (room_id, username),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/members/<username>/untimeout", methods=["POST"])
+def untimeout_room_member(room_id, username):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+
+    conn.execute(
+        "UPDATE chat_room_members SET timeout_until = NULL WHERE room_id = ? AND username = ?",
         (room_id, username),
     )
     conn.commit()
@@ -627,9 +705,15 @@ def handle_send_message(data):
         return
 
     conn = get_db()
-    allowed = bool(session.get("is_admin")) or is_room_member(conn, room_id, session["username"])
+    is_admin = bool(session.get("is_admin"))
+    allowed = is_admin or is_room_member(conn, room_id, session["username"])
     if not allowed:
         conn.close()
+        return
+
+    if not is_admin and is_timed_out(conn, room_id, session["username"]):
+        conn.close()
+        emit("timeout_error", {"message": "타임아웃 상태에서는 메시지를 보낼 수 없습니다."})
         return
 
     cur = conn.execute(

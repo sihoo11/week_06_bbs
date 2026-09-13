@@ -110,6 +110,10 @@
         if (el) el.remove();
     });
 
+    socket.on('timeout_error', ({ message }) => {
+        alert(message);
+    });
+
     messagesEl.scrollTop = messagesEl.scrollHeight;
 </script>
 {% endblock %}

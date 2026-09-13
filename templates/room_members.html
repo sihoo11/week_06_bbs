@@ -20,15 +20,32 @@
 
     <ul>
         {% for member in members %}
-        <li style="display: flex; justify-content: space-between; align-items: center;">
+        <li style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <span>
                 {{ member.username }}
                 {% if member.username == room.created_by %}<span class="notice-badge">방장</span>{% endif %}
+                {% if member.is_timed_out %}<span class="timeout-badge">⏱️ 타임아웃 중 ({{ member.timeout_until }}까지)</span>{% endif %}
             </span>
             {% if member.username != room.created_by %}
-            <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove">
-                <button type="submit" class="comment-delete-btn">내보내기</button>
-            </form>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                {% if member.is_timed_out %}
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout">
+                    <button type="submit" class="room-manage-btn">타임아웃 해제</button>
+                </form>
+                {% else %}
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/timeout" style="display: flex; gap: 4px;">
+                    <select name="duration">
+                        <option value="5">5분</option>
+                        <option value="10">10분</option>
+                        <option value="60">1시간</option>
+                    </select>
+                    <button type="submit" class="room-manage-btn">타임아웃</button>
+                </form>
+                {% endif %}
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove">
+                    <button type="submit" class="comment-delete-btn">내보내기</button>
+                </form>
+            </div>
             {% endif %}
         </li>
         {% endfor %}
