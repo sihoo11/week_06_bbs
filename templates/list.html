@@ -13,14 +13,18 @@
 {% block content %}
     <div class="notice-section">
         {% set notices = posts | selectattr('is_notice', 'equalto', 1) | list %}
-        {% for post in notices %}
+        {% if notices | length > 0 %}
             <div class="notice-item">
                 <span class="notice-icon">📢</span>
-                <a href="/posts/{{ post.id }}" class="notice-title">{{ post.title }}</a>
-                <span class="notice-date">{{ post.created_at }}</span>
+                <a href="/posts/{{ notices[0].id }}" class="notice-title">{{ notices[0].title }}</a>
+                <span class="notice-date">{{ notices[0].created_at }}</span>
             </div>
-        {% endfor %}
-        {% if notices | length == 0 %}
+            {% if notices | length > 1 %}
+                <div class="notice-more">
+                    <a href="/notices">공지 목록 보기 ({{ notices | length }}개)</a>
+                </div>
+            {% endif %}
+        {% else %}
             <div class="notice-empty">공지없음</div>
         {% endif %}
     </div>

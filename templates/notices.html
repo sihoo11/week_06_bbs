@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}공지 목록{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 목록으로</a>
+{% endblock %}
+
+{% block content %}
+    <h1>공지 목록</h1>
+
+    {% if notices %}
+        <ul>
+            {% for notice in notices %}
+            <li>
+                <a href="/posts/{{ notice.id }}">{{ notice.title }}</a>
+                <div class="post-meta">
+                    {% if notice.username %}{{ notice.username }}{% endif %} · {{ notice.created_at }}
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <div style="text-align: center; color: #9ca3af; padding: 40px; font-size: 14px;">
+            공지가 없습니다.
+        </div>
+    {% endif %}
+{% endblock %}

@@ -388,6 +388,19 @@ def delete_notice(post_id):
     conn.close()
     return redirect(url_for('index'))
 
+@app.route("/notices")
+def notices():
+    conn = get_db()
+    notices = conn.execute("""
+        SELECT posts.*, users.username
+        FROM posts
+        LEFT JOIN users ON posts.user_id = users.id
+        WHERE posts.is_notice = 1
+        ORDER BY posts.id DESC
+    """).fetchall()
+    conn.close()
+    return render_template("notices.html", notices=notices)
+
 @app.route("/dashboard")
 def dashboard():
     sido = request.args.get("sido", "서울")
