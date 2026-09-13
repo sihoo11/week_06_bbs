@@ -690,31 +690,29 @@
 
         .notice-section {
             background: #fef3c7;
-            border: 2px solid #f59e0b;
-            border-radius: 8px;
-            padding: 16px;
+            border-bottom: 2px solid #f59e0b;
+            padding: 20px 0;
             margin-bottom: 30px;
             animation: fadeIn 0.5s ease-out;
         }
 
         .notice-item {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             gap: 12px;
-            padding: 12px;
-            background: white;
-            border-radius: 6px;
-            margin-bottom: 8px;
+            padding: 16px 0;
+            border-bottom: 1px solid #fde68a;
             transition: all 0.3s ease;
         }
 
         .notice-item:last-child {
-            margin-bottom: 0;
+            border-bottom: none;
         }
 
         .notice-item:hover {
-            box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);
-            transform: translateX(4px);
+            background: #fffbeb;
+            padding-left: 8px;
+            padding-right: 8px;
         }
 
         .notice-badge {

@@ -11,6 +11,24 @@
 {% endblock %}
 
 {% block content %}
+    {% if posts %}
+        <div class="notice-section">
+            {% set notice_exists = false %}
+            {% for post in posts %}
+                {% if post.is_notice %}
+                    {% if not notice_exists %}
+                        {% set notice_exists = true %}
+                    {% endif %}
+                    <div class="notice-item">
+                        <span class="notice-badge">📢 공지</span>
+                        <a href="/posts/{{ post.id }}">{{ post.title }}</a>
+                        <div class="post-meta">{{ post.created_at }}</div>
+                    </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    {% endif %}
+
     <h1>게시판</h1>
 
     <form method="GET" action="/" class="search-form">
@@ -23,20 +41,6 @@
         "<strong>{{ search_query }}</strong>" 검색 결과 ({{ posts|length }}개)
         <a href="/">초기화</a>
     </div>
-    {% endif %}
-
-    {% if posts %}
-        <div class="notice-section">
-            {% for post in posts %}
-                {% if post.is_notice %}
-                    <div class="notice-item">
-                        <span class="notice-badge">📢 공지</span>
-                        <a href="/posts/{{ post.id }}">{{ post.title }}</a>
-                        <div class="post-meta">{{ post.created_at }}</div>
-                    </div>
-                {% endif %}
-            {% endfor %}
-        </div>
     {% endif %}
 
     <ul>
