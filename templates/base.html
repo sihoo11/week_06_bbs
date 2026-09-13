@@ -877,8 +877,11 @@
             margin-bottom: 8px;
         }
 
-        .invite-form input {
+        .invite-form input[type="text"] {
             flex: 1;
+            width: auto;
+            margin-bottom: 0;
+            min-width: 0;
             padding: 14px 16px;
             border: none;
             background: #f2f4f6;
@@ -889,7 +892,7 @@
             transition: background 0.15s ease;
         }
 
-        .invite-form input:focus {
+        .invite-form input[type="text"]:focus {
             outline: 2px solid #3b82f6;
             outline-offset: -2px;
             background: white;
