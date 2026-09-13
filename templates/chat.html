@@ -97,6 +97,20 @@
         }
     });
 
+    messagesEl.addEventListener('contextmenu', (e) => {
+        const messageEl = e.target.closest('.chat-message');
+        if (messageEl) {
+            e.preventDefault();
+            const id = Number(messageEl.dataset.id);
+            const username = messageEl.querySelector('.comment-author').textContent;
+            const canDeleteMsg = IS_ADMIN || username === CURRENT_USERNAME;
+
+            if (canDeleteMsg && confirm('메시지를 삭제하시겠습니까?')) {
+                socket.emit('delete_message', { id });
+            }
+        }
+    });
+
     socket.on('new_message', appendMessage);
 
     socket.on('message_deleted', ({ id }) => {
