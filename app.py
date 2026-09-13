@@ -160,6 +160,36 @@ def login():
 def logout():
     session.clear()
     return redirect('/')
+
+@app.route('/change-password', methods=['GET', 'POST'])
+def change_password():
+    if "user_id" not in session:
+        return redirect('/login')
+
+    if request.method == 'POST':
+        old_password = request.form['old_password']
+        new_password = request.form['new_password']
+        new_password_confirm = request.form['new_password_confirm']
+
+        if new_password != new_password_confirm:
+            return render_template('change_password.html', error='새 비밀번호가 일치하지 않습니다.')
+
+        conn = get_db()
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+        conn.close()
+
+        if not check_password_hash(user['password_hash'], old_password):
+            return render_template('change_password.html', error='현재 비밀번호가 틀렸습니다.')
+
+        hashed_pw = generate_password_hash(new_password)
+        conn = get_db()
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hashed_pw, session["user_id"]))
+        conn.commit()
+        conn.close()
+
+        return render_template('change_password.html', success='비밀번호가 변경되었습니다.')
+
+    return render_template('change_password.html')
         
 def get_db() :
     conn = sqlite3.connect(DATABASE)
