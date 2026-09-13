@@ -27,9 +27,9 @@
             {% endfor %}
         </div>
 
-        <form id="chat-form" class="comment-form">
-            <textarea id="chat-input" placeholder="메시지를 입력하세요" required></textarea>
-            <button type="submit">전송</button>
+        <form id="chat-form">
+            <textarea id="chat-input" placeholder="메시지를 입력하세요..." required></textarea>
+            <button type="submit" title="전송">✈️</button>
         </form>
     </div>
 {% endblock %}
@@ -74,12 +74,18 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    inputEl.addEventListener('input', () => {
+        inputEl.style.height = 'auto';
+        inputEl.style.height = Math.min(inputEl.scrollHeight, 100) + 'px';
+    });
+
     formEl.addEventListener('submit', (e) => {
         e.preventDefault();
         const content = inputEl.value.trim();
         if (!content) return;
         socket.emit('send_message', { content });
         inputEl.value = '';
+        inputEl.style.height = 'auto';
     });
 
     messagesEl.addEventListener('click', (e) => {
