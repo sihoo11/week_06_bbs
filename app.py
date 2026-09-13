@@ -160,6 +160,7 @@ def login():
         if user and check_password_hash(user['password_hash'], password):
             session['user_id'] = user['id']
             session['username'] = user['username']
+            session['is_admin'] = user['is_admin']
             return redirect('/')
         return render_template('login.html', error='아이디 또는 비밀번호가 틀렸습니다.')
     return render_template('login.html')
