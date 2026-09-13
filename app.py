@@ -1,4 +1,5 @@
 from flask import Flask, session, request, render_template, redirect, url_for
+from flask_socketio import SocketIO, emit
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import sqlite3
@@ -7,6 +8,7 @@ from opendata import fetch_air_quality
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
+socketio = SocketIO(app, async_mode="threading")
 
 DATABASE = Path(__file__).resolve().parent / 'bbs.db'
 
@@ -407,6 +409,72 @@ def dashboard():
     rows, source = fetch_air_quality(sido)
     return render_template('dashboard.html', rows=rows, sido=sido, source=source)
 
+@app.route("/chat")
+def chat():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM chat_messages ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+    conn.close()
+
+    messages = list(reversed(rows))
+    return render_template("chat.html", messages=messages)
+
+@socketio.on("connect")
+def handle_connect():
+    if "user_id" not in session:
+        return False
+
+@socketio.on("send_message")
+def handle_send_message(data):
+    if "user_id" not in session:
+        return
+    content = (data or {}).get("content", "").strip()
+    if not content:
+        return
+
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO chat_messages (username, content) VALUES (?, ?)",
+        (session["username"], content),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+
+    emit("new_message", {
+        "id": row["id"],
+        "username": row["username"],
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }, broadcast=True)
+
+@socketio.on("delete_message")
+def handle_delete_message(data):
+    if "user_id" not in session:
+        return
+    message_id = (data or {}).get("id")
+
+    conn = get_db()
+    message = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    if message is None:
+        conn.close()
+        return
+
+    is_owner = message["username"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return
+
+    conn.execute("DELETE FROM chat_messages WHERE id = ?", (message_id,))
+    conn.commit()
+    conn.close()
+    emit("message_deleted", {"id": message_id}, broadcast=True)
+
 if __name__ == '__main__' :
     create_tables()
-    app.run(debug=True, port=5001)
+    socketio.run(app, debug=True, port=5001)

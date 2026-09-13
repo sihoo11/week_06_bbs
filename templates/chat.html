@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}실시간 채팅{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 목록으로</a>
+{% endblock %}
+
+{% block content %}
+    <h1>💬 실시간 채팅</h1>
+
+    <div class="chat-container">
+        <div class="comments-list chat-messages" id="chat-messages">
+            {% for m in messages %}
+            <div class="comment chat-message" data-id="{{ m.id }}">
+                <div class="comment-header">
+                    <span class="comment-author{% if m.username == session.get('username') %} chat-message-own{% endif %}">
+                        {{ m.username }}
+                    </span>
+                    <span class="comment-date">{{ m.created_at }}</span>
+                </div>
+                <p class="comment-content">{{ m.content }}</p>
+                {% if m.username == session.get('username') or session.get('is_admin') %}
+                <button type="button" class="comment-delete-btn chat-delete-btn" data-id="{{ m.id }}">삭제</button>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <form id="chat-form" class="comment-form">
+            <textarea id="chat-input" placeholder="메시지를 입력하세요" required></textarea>
+            <button type="submit">전송</button>
+        </form>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<script>
+    const socket = io();
+    const CURRENT_USERNAME = {{ session.get('username') | tojson }};
+    const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
+    const messagesEl = document.getElementById('chat-messages');
+    const formEl = document.getElementById('chat-form');
+    const inputEl = document.getElementById('chat-input');
+
+    function canDelete(username) {
+        return IS_ADMIN || username === CURRENT_USERNAME;
+    }
+
+    function escapeHtml(str) {
+        const d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    function appendMessage(msg) {
+        const div = document.createElement('div');
+        div.className = 'comment chat-message';
+        div.dataset.id = msg.id;
+        const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">삭제</button>` : '';
+        div.innerHTML = `
+            <div class="comment-header">
+                <span class="comment-author${msg.username === CURRENT_USERNAME ? ' chat-message-own' : ''}">
+                    ${escapeHtml(msg.username)}
+                </span>
+                <span class="comment-date">${escapeHtml(msg.created_at)}</span>
+            </div>
+            <p class="comment-content"></p>
+            ${deleteBtn}
+        `;
+        div.querySelector('.comment-content').textContent = msg.content;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    formEl.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const content = inputEl.value.trim();
+        if (!content) return;
+        socket.emit('send_message', { content });
+        inputEl.value = '';
+    });
+
+    messagesEl.addEventListener('click', (e) => {
+        if (e.target.matches('.chat-delete-btn')) {
+            const id = Number(e.target.dataset.id);
+            if (confirm('메시지를 삭제하시겠습니까?')) {
+                socket.emit('delete_message', { id });
+            }
+        }
+    });
+
+    socket.on('new_message', appendMessage);
+
+    socket.on('message_deleted', ({ id }) => {
+        const el = messagesEl.querySelector(`[data-id="${id}"]`);
+        if (el) el.remove();
+    });
+
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+</script>
+{% endblock %}
