@@ -697,11 +697,7 @@
             </div>
             <div class="nav-right-top">
                 {% if session.get("user_id") %}
-                    {% if session.get("is_admin") %}
-                        <span class="username admin-name">{{ session.get("username") }}님</span>
-                    {% else %}
-                        <span class="username">{{ session.get("username") }}님</span>
-                    {% endif %}
+                    <span class="username">{{ session.get("username") }}님</span>
                     <a href="/change-password">🔐 비밀번호 변경</a>
                     <form method="POST" action="/logout">
                         <button type="submit">로그아웃</button>
