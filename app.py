@@ -1,9 +1,8 @@
-from flask import Flask, session
+from flask import Flask, session, request, render_template, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import sqlite3
 from pathlib import Path
-from flask import Flask, request, render_template, redirect, url_for
 from opendata import fetch_air_quality
 
 app = Flask(__name__)
@@ -13,18 +12,29 @@ DATABASE = Path(__file__).resolve().parent / 'bbs.db'
 
 @app.route('/')
 def index():
-    search_query = request.args.get('search', '').strip()
+    q = request.args.get('q', '').strip()
     conn = get_db()
 
-    if search_query:
-        posts = conn.execute("SELECT * FROM posts WHERE title LIKE ? ORDER BY created_at DESC",
-                           (f"%{search_query}%",)).fetchall()
+    if q :
+        keyword = f"%{q}%"
+        posts = conn.execute("""
+            SELECT posts.*, users.username
+            FROM posts
+            LEFT JOIN users ON posts.user_id = users.id
+            WHERE posts.title LIKE ? OR posts.content LIKE ?
+            ORDER BY posts.is_notice DESC, posts.id DESC
+        """, (keyword, keyword)).fetchall()
     else:
-        posts = conn.execute("SELECT * FROM posts ORDER BY created_at DESC").fetchall()
+        posts = conn.execute("""
+            SELECT posts.*, users.username
+            FROM posts
+            LEFT JOIN users ON posts.user_id = users.id
+            ORDER BY posts.is_notice DESC, posts.id DESC
+        """).fetchall()
 
     conn.close()
-    return render_template('list.html', posts=posts, search_query=search_query)
-    
+    return render_template("list.html", posts=posts, q=q)
+
 @app.route("/posts/<int:post_id>")
 def detail(post_id):
     post = get_post_or_404(post_id)
@@ -161,41 +171,6 @@ def get_post_or_404(post_id):
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
     conn.close()
     return post
-
-def create_table() :
-    conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            is_admin INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            user_id INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    """)
-    try:
-        conn.execute("ALTER TABLE posts ADD COLUMN user_id INTEGER")
-    except sqlite3.OperationalError :
-        pass
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
-    except sqlite3.OperationalError :
-        pass
-
-    conn.execute("UPDATE users SET is_admin = 1 WHERE username = 'sihooissue11'")
-
-    conn.commit()
-    conn.close()
 
 def create_tables():
     conn = get_db()
