@@ -7,71 +7,87 @@
 {% endblock %}
 
 {% block content %}
-    <h1>⚙️ {{ room.name }} - 방 설정</h1>
+    <h1>⚙️ 방 설정</h1>
 
     {% if error %}
     <div class="error-message">❌ {{ error }}</div>
     {% endif %}
 
-    <h2 class="section-heading">🔧 방 정보</h2>
-    <div class="room-settings">
-        <div class="room-setting-row">
-            <span class="room-setting-label">
-                {% if room.is_public %}🌐 공개방{% else %}🔒 초대전용 방{% endif %}
-                <span style="font-weight: 400; color: #9ca3af;">— 언제든지 전환할 수 있어요</span>
-            </span>
+    <div class="section-heading">방 정보</div>
+    <div class="settings-card">
+        <div class="settings-row">
+            <div>
+                <div class="settings-row-label">공개방으로 전환</div>
+                <div class="settings-row-desc">켜면 누구나 목록에서 보고 바로 참여할 수 있어요</div>
+            </div>
             <form method="POST" action="/chat/{{ room.id }}/visibility">
-                <button type="submit" class="room-manage-btn">
-                    {% if room.is_public %}초대전용으로 전환{% else %}공개방으로 전환{% endif %}
-                </button>
+                <label class="toggle-switch">
+                    <input type="checkbox" {% if room.is_public %}checked{% endif %} onchange="this.form.submit()">
+                    <span class="toggle-slider"></span>
+                </label>
             </form>
         </div>
-        <div class="room-setting-row">
-            <span class="room-setting-label">🐢 슬로우 모드</span>
-            <form method="POST" action="/chat/{{ room.id }}/slowmode" style="display: flex; gap: 6px; align-items: center;">
-                <input type="number" name="seconds" min="0" value="{{ room.slow_mode_seconds }}" style="width: 70px; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px;">
-                <span style="font-size: 12px; color: #9ca3af;">초 (0 = 끄기)</span>
-                <button type="submit" class="room-manage-btn">적용</button>
+        <div class="settings-row">
+            <div>
+                <div class="settings-row-label">🐢 슬로우 모드</div>
+                <div class="settings-row-desc">설정한 시간마다 한 번만 메시지를 보낼 수 있어요</div>
+            </div>
+            <form method="POST" action="/chat/{{ room.id }}/slowmode">
+                <select name="seconds" class="settings-select" onchange="this.form.submit()">
+                    <option value="0" {% if room.slow_mode_seconds == 0 %}selected{% endif %}>끄기</option>
+                    <option value="5" {% if room.slow_mode_seconds == 5 %}selected{% endif %}>5초</option>
+                    <option value="10" {% if room.slow_mode_seconds == 10 %}selected{% endif %}>10초</option>
+                    <option value="30" {% if room.slow_mode_seconds == 30 %}selected{% endif %}>30초</option>
+                    <option value="60" {% if room.slow_mode_seconds == 60 %}selected{% endif %}>1분</option>
+                </select>
             </form>
         </div>
     </div>
 
-    <h2 class="section-heading">👥 멤버 관리</h2>
-    <form method="POST" class="search-form">
+    <div class="section-heading">멤버 초대</div>
+    <form method="POST" class="invite-form">
         <input type="text" name="username" placeholder="초대할 사용자 아이디" required>
-        <button type="submit" style="width: auto; padding: 8px 16px;">초대하기</button>
+        <button type="submit">초대</button>
     </form>
 
-    <ul>
+    <div class="section-heading">멤버 {{ members|length }}명</div>
+    <div class="settings-card">
         {% for member in members %}
-        <li class="list-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-            <span>
-                {{ member.username }}
-                {% if member.username == room.created_by %}<span class="notice-badge">방장</span>{% endif %}
-                {% if member.is_timed_out %}<span class="timeout-badge">⏱️ 타임아웃 중 ({{ member.timeout_until }}까지)</span>{% endif %}
-            </span>
+        <div class="member-row">
+            <div class="member-info">
+                <div class="member-avatar">{{ member.username[0]|upper }}</div>
+                <div>
+                    <div class="member-name">
+                        {{ member.username }}
+                        {% if member.username == room.created_by %}<span class="role-badge">방장</span>{% endif %}
+                    </div>
+                    {% if member.is_timed_out %}
+                    <div class="settings-row-desc" style="color: #f59e0b;">⏱️ {{ member.timeout_until }}까지 타임아웃</div>
+                    {% endif %}
+                </div>
+            </div>
             {% if member.username != room.created_by %}
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="member-actions">
                 {% if member.is_timed_out %}
                 <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout" class="btn-form">
-                    <button type="submit" class="room-manage-btn">타임아웃 해제</button>
+                    <button type="submit" class="text-btn">타임아웃 해제</button>
                 </form>
                 {% else %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/timeout" style="display: flex; gap: 4px;">
-                    <select name="duration">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/timeout" class="btn-form" style="gap: 4px;">
+                    <select name="duration" class="settings-select" style="font-size: 12px; padding: 5px 8px;">
                         <option value="5">5분</option>
                         <option value="10">10분</option>
                         <option value="60">1시간</option>
                     </select>
-                    <button type="submit" class="room-manage-btn">타임아웃</button>
+                    <button type="submit" class="text-btn">타임아웃</button>
                 </form>
                 {% endif %}
                 <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove" class="btn-form">
-                    <button type="submit" class="comment-delete-btn">내보내기</button>
+                    <button type="submit" class="text-btn text-btn-danger">내보내기</button>
                 </form>
             </div>
             {% endif %}
-        </li>
+        </div>
         {% endfor %}
-    </ul>
+    </div>
 {% endblock %}
