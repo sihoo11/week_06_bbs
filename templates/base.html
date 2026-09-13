@@ -174,6 +174,17 @@
             border-bottom: none;
         }
 
+        ul li.list-card {
+            padding-left: 14px;
+            transition: background 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        ul li.list-card:hover {
+            background: #f9fafb;
+            padding-left: 14px;
+            box-shadow: inset 3px 0 0 0 #3b82f6;
+        }
+
         ul li a {
             color: #3b82f6;
             text-decoration: none;
@@ -671,44 +682,57 @@
             display: inline;
         }
 
-        .comment-delete-btn {
+        .comment-delete-btn,
+        .room-manage-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            font-family: inherit;
+            line-height: 1.4;
+            cursor: pointer;
+            text-decoration: none;
+            box-sizing: border-box;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .comment-delete-btn {
             background: #fee2e2;
             color: #991b1b;
             border: 1px solid #fecaca;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: 500;
         }
 
         .comment-delete-btn:hover {
             background: #fecaca;
             border-color: #fca5a5;
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px rgba(153, 27, 27, 0.18);
+        }
+
+        .comment-delete-btn:active {
+            transform: translateY(0);
+            box-shadow: none;
         }
 
         .room-manage-btn {
-            display: inline-block;
-            padding: 6px 10px;
             background: #dbeafe;
             color: #1e40af;
             border: 1px solid #bfdbfe;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
-            text-decoration: none;
-            transition: all 0.2s ease;
         }
 
         .room-manage-btn:hover {
             background: #bfdbfe;
             border-color: #93c5fd;
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px rgba(30, 64, 175, 0.18);
         }
 
-        .room-manage-btn[type="submit"] {
-            cursor: pointer;
-            font-family: inherit;
+        .room-manage-btn:active {
+            transform: translateY(0);
+            box-shadow: none;
         }
 
         .timeout-badge {
@@ -791,6 +815,51 @@
             border-radius: 50%;
             background: #22c55e;
             margin-right: 4px;
+            animation: pulseDot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulseDot {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+            50% { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
+        }
+
+        @keyframes messagePopIn {
+            from { opacity: 0; transform: scale(0.85) translateY(6px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        .chat-message.message-pop-in {
+            animation: messagePopIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes slideDownIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .pinned-bar.pin-enter {
+            animation: slideDownIn 0.3s ease-out;
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translateX(-1px); }
+            20%, 80% { transform: translateX(2px); }
+            30%, 50%, 70% { transform: translateX(-4px); }
+            40%, 60% { transform: translateX(4px); }
+        }
+
+        .error-message {
+            animation: shake 0.4s ease;
+        }
+
+        @keyframes popCheck {
+            0% { opacity: 0; transform: scale(0.9); }
+            60% { opacity: 1; transform: scale(1.03); }
+            100% { transform: scale(1); }
+        }
+
+        .success-message {
+            animation: popCheck 0.35s ease-out;
         }
 
         .online-chip {

@@ -85,7 +85,7 @@
 
     function appendMessage(msg) {
         const div = document.createElement('div');
-        div.className = 'chat-message' + (msg.username === CURRENT_USERNAME ? ' own' : '');
+        div.className = 'chat-message message-pop-in' + (msg.username === CURRENT_USERNAME ? ' own' : '');
         div.dataset.id = msg.id;
         const pinBtn = CAN_MANAGE ? `<button type="button" class="pin-btn chat-pin-btn" data-id="${msg.id}" title="고정">📌</button>` : '';
         const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">✕</button>` : '';
@@ -158,6 +158,9 @@
     socket.on('message_pinned', (msg) => {
         pinnedContentEl.textContent = `${msg.username}: ${msg.content}`;
         pinnedBarEl.hidden = false;
+        pinnedBarEl.classList.remove('pin-enter');
+        void pinnedBarEl.offsetWidth;
+        pinnedBarEl.classList.add('pin-enter');
     });
 
     socket.on('message_unpinned', () => {

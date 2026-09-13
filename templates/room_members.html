@@ -41,7 +41,7 @@
 
     <ul>
         {% for member in members %}
-        <li style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <li class="list-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <span>
                 {{ member.username }}
                 {% if member.username == room.created_by %}<span class="notice-badge">방장</span>{% endif %}

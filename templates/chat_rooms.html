@@ -21,7 +21,7 @@
     {% if rooms %}
         <ul>
             {% for room in rooms %}
-            <li style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <li class="list-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                 <span>
                     {% if room.is_member or session.get('is_admin') %}
                         <a href="/chat/{{ room.id }}">🗨️ {{ room.name }}</a>
