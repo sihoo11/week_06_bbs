@@ -18,7 +18,7 @@
         {{ post.content }}
     </div>
 
-    {% if session.get("user_id") == post.user_id or (user and user.is_admin) %}
+    {% if session.get("user_id") == post.user_id %}
     <div class="post-actions">
         <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
         <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
@@ -26,4 +26,40 @@
         </form>
     </div>
     {% endif %}
+
+    <div class="comments-section">
+        <h2>댓글 ({{ comments|length }})</h2>
+
+        <div class="comments-list">
+            {% for comment in comments %}
+            <div class="comment">
+                <div class="comment-header">
+                    <div>
+                        <div class="comment-author">{{ comment.username or '익명' }}</div>
+                        <div class="comment-date">{{ comment.created_at }}</div>
+                    </div>
+                    {% if session.get("user_id") == comment.user_id %}
+                    <form method="POST" action="/comments/{{ comment.id }}/delete" class="comment-delete">
+                        <button type="submit" class="comment-delete-btn">삭제</button>
+                    </form>
+                    {% endif %}
+                </div>
+                <div class="comment-content">
+                    {{ comment.content }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if session.get("user_id") %}
+        <form method="POST" action="/posts/{{ post.id }}/comments" class="comment-form">
+            <textarea name="content" placeholder="댓글을 입력하세요..." required></textarea>
+            <button type="submit">댓글 작성</button>
+        </form>
+        {% else %}
+        <div class="login-prompt">
+            <a href="/login">로그인</a>하면 댓글을 작성할 수 있습니다.
+        </div>
+        {% endif %}
+    </div>
 {% endblock %}

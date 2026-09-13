@@ -24,19 +24,24 @@ def index():
 
     conn.close()
     return render_template('list.html', posts=posts, search_query=search_query)
-
+    
 @app.route("/posts/<int:post_id>")
 def detail(post_id):
+    post = get_post_or_404(post_id)
+    if post is None:
+        return "글 없음", 404
+
     conn = get_db()
-    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-    author = None
-    user = None
-    if post:
-        author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
-    if "user_id" in session:
-        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    comments = conn.execute("""
+        SELECT comments.*, users.username
+        FROM comments
+        LEFT JOIN users ON comments.user_id = users.id
+        WHERE comments.post_id = ?
+        ORDER BY comments.id ASC
+    """, (post_id,)).fetchall()
     conn.close()
-    return render_template('detail.html', post=post, author=author, user=user)
+
+    return render_template("detail.html", post=post, comments=comments)
 
 @app.route("/new", methods=["GET", "POST"])
 def new():
@@ -65,14 +70,12 @@ def edit(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
 
     is_owner = post["user_id"] == session["user_id"]
-    is_admin = user and user["is_admin"]
 
-    if not (is_owner or is_admin):
-        return "본인 또는 관리자만 수정 가능합니다.", 403
+    if not is_owner:
+        return "본인만 수정 가능합니다.", 403
 
     if request.method == "POST":
         title = request.form["title"]
@@ -92,14 +95,12 @@ def delete_post(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
 
     is_owner = post["user_id"] == session["user_id"]
-    is_admin = user and user["is_admin"]
 
-    if not (is_owner or is_admin):
+    if not is_owner:
         conn.close()
-        return "본인 또는 관리자만 삭제 가능합니다.", 403
+        return "본인만 삭제 가능합니다.", 403
 
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
     conn.commit()
@@ -155,6 +156,12 @@ def get_db() :
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_post_or_404(post_id):
+    conn = get_db()
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    conn.close()
+    return post
+
 def create_table() :
     conn = get_db()
     conn.execute("""
@@ -190,6 +197,97 @@ def create_table() :
     conn.commit()
     conn.close()
 
+def create_tables():
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            user_id INTEGER,
+            is_notice INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            user_id INTEGER,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (post_id) REFERENCES posts(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
+    for statement in [
+        "ALTER TABLE posts ADD COLUMN user_id INTEGER",
+        "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+        "ALTER TABLE posts ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0",
+    ]:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
+
+@app.route("/posts/<int:post_id>/comments", methods=["POST"])
+def create_comment(post_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    content = request.form.get("content", "").strip()
+    if not content:
+        return redirect(url_for("detail", post_id=post_id))
+
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)",
+        (post_id, session["user_id"], content)
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("detail", post_id=post_id))
+
+
+@app.route("/comments/<int:comment_id>/delete", methods=["POST"])
+def delete_comment(comment_id):
+    conn = get_db()
+    comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+    if comment is None:
+        conn.close()
+        return "댓글 없음", 404
+
+    is_owner = comment["user_id"] == session.get("user_id")
+    if not is_owner:
+        conn.close()
+        return "권한 없음", 403
+
+    conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("detail", post_id=comment["post_id"]))
+
 @app.route("/dashboard")
 def dashboard():
     sido = request.args.get("sido", "서울")
@@ -197,5 +295,5 @@ def dashboard():
     return render_template('dashboard.html', rows=rows, sido=sido, source=source)
 
 if __name__ == '__main__' :
-    create_table()
+    create_tables()
     app.run(debug=True, port=5001)
