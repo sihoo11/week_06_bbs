@@ -24,7 +24,7 @@
         {{ post.content }}
     </div>
 
-    {% if session.get("user_id") == post.user_id %}
+    {% if session.get("user_id") == post.user_id or (user and user.is_admin) %}
     <div class="post-actions">
         <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
         <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
@@ -48,7 +48,7 @@
                         {% endif %}
                         <div class="comment-date">{{ comment.created_at }}</div>
                     </div>
-                    {% if session.get("user_id") == comment.user_id %}
+                    {% if session.get("user_id") == comment.user_id or (user and user.is_admin) %}
                     <form method="POST" action="/comments/{{ comment.id }}/delete" class="comment-delete">
                         <button type="submit" class="comment-delete-btn">삭제</button>
                     </form>

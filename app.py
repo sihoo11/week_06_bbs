@@ -43,6 +43,9 @@ def detail(post_id):
 
     conn = get_db()
     author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
+    user = None
+    if "user_id" in session:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     comments = conn.execute("""
         SELECT comments.*, users.username, users.is_admin
         FROM comments
@@ -52,7 +55,7 @@ def detail(post_id):
     """, (post_id,)).fetchall()
     conn.close()
 
-    return render_template("detail.html", post=post, author=author, comments=comments)
+    return render_template("detail.html", post=post, author=author, user=user, comments=comments)
 
 @app.route("/new", methods=["GET", "POST"])
 def new():
@@ -81,12 +84,14 @@ def edit(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
 
     is_owner = post["user_id"] == session["user_id"]
+    is_admin = user and user["is_admin"]
 
-    if not is_owner:
-        return "본인만 수정 가능합니다.", 403
+    if not (is_owner or is_admin):
+        return "본인 또는 관리자만 수정 가능합니다.", 403
 
     if request.method == "POST":
         title = request.form["title"]
@@ -106,12 +111,14 @@ def delete_post(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
 
     is_owner = post["user_id"] == session["user_id"]
+    is_admin = user and user["is_admin"]
 
-    if not is_owner:
+    if not (is_owner or is_admin):
         conn.close()
-        return "본인만 삭제 가능합니다.", 403
+        return "본인 또는 관리자만 삭제 가능합니다.", 403
 
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
     conn.commit()
@@ -284,8 +291,11 @@ def delete_comment(comment_id):
         conn.close()
         return "댓글 없음", 404
 
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session.get("user_id"),)).fetchone()
     is_owner = comment["user_id"] == session.get("user_id")
-    if not is_owner:
+    is_admin = user and user["is_admin"]
+
+    if not (is_owner or is_admin):
         conn.close()
         return "권한 없음", 403
 
