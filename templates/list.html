@@ -12,18 +12,15 @@
 
 {% block content %}
     <div class="notice-section">
-        {% set has_notice = false %}
-        {% for post in posts %}
-            {% if post.is_notice %}
-                {% set has_notice = true %}
-                <div class="notice-item">
-                    <span class="notice-icon">📢</span>
-                    <a href="/posts/{{ post.id }}" class="notice-title">{{ post.title }}</a>
-                    <span class="notice-date">{{ post.created_at }}</span>
-                </div>
-            {% endif %}
+        {% set notices = posts | selectattr('is_notice', 'equalto', 1) | list %}
+        {% for post in notices %}
+            <div class="notice-item">
+                <span class="notice-icon">📢</span>
+                <a href="/posts/{{ post.id }}" class="notice-title">{{ post.title }}</a>
+                <span class="notice-date">{{ post.created_at }}</span>
+            </div>
         {% endfor %}
-        {% if not has_notice %}
+        {% if notices | length == 0 %}
             <div class="notice-empty">공지없음</div>
         {% endif %}
     </div>
