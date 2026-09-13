@@ -49,8 +49,8 @@
                         <div class="comment-date">{{ comment.created_at }}</div>
                     </div>
                     {% if session.get("user_id") == comment.user_id or (user and user.is_admin) %}
-                    <form method="POST" action="/comments/{{ comment.id }}/delete" class="comment-delete">
-                        <button type="submit" class="comment-delete-btn">삭제</button>
+                    <form method="POST" action="/comments/{{ comment.id }}/delete" class="btn-form">
+                        <button type="submit" class="text-btn text-btn-danger">삭제</button>
                     </form>
                     {% endif %}
                 </div>
