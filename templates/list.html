@@ -11,28 +11,17 @@
 {% endblock %}
 
 {% block content %}
-    {% if posts %}
-        {% set has_notice = false %}
+    <div class="notice-section">
         {% for post in posts %}
             {% if post.is_notice %}
-                {% set has_notice = true %}
-            {% endif %}
-        {% endfor %}
-
-        {% if has_notice %}
-        <div class="notice-section">
-            {% for post in posts %}
-                {% if post.is_notice %}
                 <div class="notice-item">
                     <span class="notice-icon">📢</span>
                     <a href="/posts/{{ post.id }}" class="notice-title">{{ post.title }}</a>
                     <span class="notice-date">{{ post.created_at }}</span>
                 </div>
-                {% endif %}
-            {% endfor %}
-        </div>
-        {% endif %}
-    {% endif %}
+            {% endif %}
+        {% endfor %}
+    </div>
 
     <h1>게시판</h1>
 
