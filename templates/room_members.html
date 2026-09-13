@@ -50,7 +50,7 @@
             {% if member.username != room.created_by %}
             <div style="display: flex; align-items: center; gap: 8px;">
                 {% if member.is_timed_out %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout" class="btn-form">
                     <button type="submit" class="room-manage-btn">타임아웃 해제</button>
                 </form>
                 {% else %}
@@ -63,7 +63,7 @@
                     <button type="submit" class="room-manage-btn">타임아웃</button>
                 </form>
                 {% endif %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove" class="btn-form">
                     <button type="submit" class="comment-delete-btn">내보내기</button>
                 </form>
             </div>

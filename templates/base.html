@@ -688,15 +688,28 @@
             align-items: center;
             justify-content: center;
             padding: 6px 10px;
+            margin: 0;
             border-radius: 6px;
             font-size: 12px;
             font-weight: 500;
             font-family: inherit;
             line-height: 1.4;
+            vertical-align: middle;
             cursor: pointer;
             text-decoration: none;
             box-sizing: border-box;
+            appearance: none;
+            -webkit-appearance: none;
             transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .comment-delete-btn:hover,
+        .room-manage-btn:hover {
+            text-decoration: none;
+        }
+
+        .btn-form {
+            display: contents;
         }
 
         .comment-delete-btn {
@@ -781,6 +794,10 @@
             padding: 10px 14px;
             margin-bottom: 4px;
             font-size: 13px;
+        }
+
+        .pinned-bar[hidden] {
+            display: none;
         }
 
         .pinned-bar .pinned-label {
