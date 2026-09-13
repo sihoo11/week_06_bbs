@@ -9,11 +9,9 @@
 {% block content %}
     <h1>💬 채팅방 목록</h1>
 
-    <form method="POST" class="post-form" style="margin-bottom: 30px;">
-        <div style="display: flex; gap: 8px;">
-            <input type="text" name="name" placeholder="새 채팅방 이름" required style="flex: 1;">
-            <button type="submit">방 만들기</button>
-        </div>
+    <form method="POST" class="search-form">
+        <input type="text" name="name" placeholder="새 채팅방 이름" required>
+        <button type="submit" style="width: auto; padding: 8px 16px;">방 만들기</button>
     </form>
 
     {% if rooms %}
