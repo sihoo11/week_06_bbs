@@ -10,19 +10,19 @@
     <h1>💬 실시간 채팅</h1>
 
     <div class="chat-container">
-        <div class="comments-list chat-messages" id="chat-messages">
+        <div class="chat-messages" id="chat-messages">
             {% for m in messages %}
-            <div class="comment chat-message" data-id="{{ m.id }}">
+            <div class="chat-message{% if m.username == session.get('username') %} own{% endif %}" data-id="{{ m.id }}">
                 <div class="comment-header">
-                    <span class="comment-author{% if m.username == session.get('username') %} chat-message-own{% endif %}">
-                        {{ m.username }}
-                    </span>
+                    <span class="comment-author">{{ m.username }}</span>
                     <span class="comment-date">{{ m.created_at }}</span>
                 </div>
-                <p class="comment-content">{{ m.content }}</p>
-                {% if m.username == session.get('username') or session.get('is_admin') %}
-                <button type="button" class="comment-delete-btn chat-delete-btn" data-id="{{ m.id }}">삭제</button>
-                {% endif %}
+                <div style="display: flex; align-items: flex-end; gap: 6px;">
+                    <p class="comment-content">{{ m.content }}</p>
+                    {% if m.username == session.get('username') or session.get('is_admin') %}
+                    <button type="button" class="comment-delete-btn chat-delete-btn" data-id="{{ m.id }}">✕</button>
+                    {% endif %}
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -56,18 +56,18 @@
 
     function appendMessage(msg) {
         const div = document.createElement('div');
-        div.className = 'comment chat-message';
+        div.className = 'chat-message' + (msg.username === CURRENT_USERNAME ? ' own' : '');
         div.dataset.id = msg.id;
-        const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">삭제</button>` : '';
+        const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">✕</button>` : '';
         div.innerHTML = `
             <div class="comment-header">
-                <span class="comment-author${msg.username === CURRENT_USERNAME ? ' chat-message-own' : ''}">
-                    ${escapeHtml(msg.username)}
-                </span>
+                <span class="comment-author">${escapeHtml(msg.username)}</span>
                 <span class="comment-date">${escapeHtml(msg.created_at)}</span>
             </div>
-            <p class="comment-content"></p>
-            ${deleteBtn}
+            <div style="display: flex; align-items: flex-end; gap: 6px;">
+                <p class="comment-content"></p>
+                ${deleteBtn}
+            </div>
         `;
         div.querySelector('.comment-content').textContent = msg.content;
         messagesEl.appendChild(div);
