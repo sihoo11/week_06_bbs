@@ -4,11 +4,11 @@
 
 {% block nav_left %}
     <a href="/new">✍️ 글쓰기</a>
-    <a href="/dashboard">📊 대시보드</a>
     <a href="/notices">📌 공지 목록</a>
     {% if session.get("is_admin") %}
         <a href="/notice/new">📢 공지 작성</a>
     {% endif %}
+    <a href="/dashboard">📊 대시보드</a>
 {% endblock %}
 
 {% block content %}
