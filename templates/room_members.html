@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}{{ room.name }} - 멤버 관리{% endblock %}
+
+{% block nav_left %}
+    <a href="/chat/{{ room.id }}">← {{ room.name }}</a>
+{% endblock %}
+
+{% block content %}
+    <h1>👥 {{ room.name }} - 멤버 관리</h1>
+
+    {% if error %}
+    <div class="error-message">❌ {{ error }}</div>
+    {% endif %}
+
+    <form method="POST" class="post-form" style="margin-bottom: 30px;">
+        <div style="display: flex; gap: 8px;">
+            <input type="text" name="username" placeholder="초대할 사용자 아이디" required style="flex: 1;">
+            <button type="submit">초대하기</button>
+        </div>
+    </form>
+
+    <ul>
+        {% for member in members %}
+        <li style="display: flex; justify-content: space-between; align-items: center;">
+            <span>
+                {{ member.username }}
+                {% if member.username == room.created_by %}<span class="notice-badge">방장</span>{% endif %}
+            </span>
+            {% if member.username != room.created_by %}
+            <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove">
+                <button type="submit" class="comment-delete-btn">내보내기</button>
+            </form>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+{% endblock %}

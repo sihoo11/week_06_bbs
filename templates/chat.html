@@ -4,6 +4,9 @@
 
 {% block nav_left %}
     <a href="/chat">← 채팅방 목록</a>
+    {% if room.created_by == session.get('username') or session.get('is_admin') %}
+        <a href="/chat/{{ room.id }}/members">👥 멤버 관리</a>
+    {% endif %}
 {% endblock %}
 
 {% block content %}

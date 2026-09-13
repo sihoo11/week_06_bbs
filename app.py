@@ -217,6 +217,13 @@ def get_post_or_404(post_id):
     conn.close()
     return post
 
+def is_room_member(conn, room_id, username):
+    member = conn.execute(
+        "SELECT 1 FROM chat_room_members WHERE room_id = ? AND username = ?",
+        (room_id, username),
+    ).fetchone()
+    return member is not None
+
 def create_tables():
     conn = get_db()
     conn.execute("""
@@ -264,6 +271,14 @@ def create_tables():
             name TEXT NOT NULL,
             created_by TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_room_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            UNIQUE(room_id, username)
         )
     """)
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
@@ -427,16 +442,29 @@ def chat_rooms():
         name = request.form.get("name", "").strip()
         if name:
             conn = get_db()
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO chat_rooms (name, created_by) VALUES (?, ?)",
                 (name, session["username"]),
+            )
+            conn.execute(
+                "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
+                (cur.lastrowid, session["username"]),
             )
             conn.commit()
             conn.close()
         return redirect("/chat")
 
     conn = get_db()
-    rooms = conn.execute("SELECT * FROM chat_rooms ORDER BY id DESC").fetchall()
+    if session.get("is_admin"):
+        rooms = conn.execute("SELECT * FROM chat_rooms ORDER BY id DESC").fetchall()
+    else:
+        rooms = conn.execute("""
+            SELECT chat_rooms.*
+            FROM chat_rooms
+            JOIN chat_room_members ON chat_rooms.id = chat_room_members.room_id
+            WHERE chat_room_members.username = ?
+            ORDER BY chat_rooms.id DESC
+        """, (session["username"],)).fetchall()
     conn.close()
     return render_template("chat_rooms.html", rooms=rooms)
 
@@ -459,6 +487,7 @@ def delete_room(room_id):
 
     conn.execute("DELETE FROM chat_rooms WHERE id = ?", (room_id,))
     conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM chat_room_members WHERE room_id = ?", (room_id,))
     conn.commit()
     conn.close()
     return redirect("/chat")
@@ -474,6 +503,11 @@ def chat_room(room_id):
         conn.close()
         return "방 없음", 404
 
+    is_admin = bool(session.get("is_admin"))
+    if not is_admin and not is_room_member(conn, room_id, session["username"]):
+        conn.close()
+        return "초대된 사용자만 입장할 수 있습니다.", 403
+
     rows = conn.execute(
         "SELECT * FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT 100",
         (room_id,),
@@ -482,6 +516,76 @@ def chat_room(room_id):
 
     messages = list(reversed(rows))
     return render_template("chat.html", room=room, messages=messages)
+
+@app.route("/chat/<int:room_id>/members", methods=["GET", "POST"])
+def room_members(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        target = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        if target is None:
+            conn.close()
+            return render_template("room_members.html", room=room, members=[], error="존재하지 않는 사용자입니다.")
+        try:
+            conn.execute(
+                "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
+                (room_id, username),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass
+        conn.close()
+        return redirect(url_for("room_members", room_id=room_id))
+
+    members = conn.execute(
+        "SELECT username FROM chat_room_members WHERE room_id = ? ORDER BY id ASC",
+        (room_id,),
+    ).fetchall()
+    conn.close()
+    return render_template("room_members.html", room=room, members=members)
+
+@app.route("/chat/<int:room_id>/members/<username>/remove", methods=["POST"])
+def remove_room_member(room_id, username):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+
+    if username == room["created_by"]:
+        conn.close()
+        return "방을 만든 사람은 제외할 수 없습니다.", 400
+
+    conn.execute(
+        "DELETE FROM chat_room_members WHERE room_id = ? AND username = ?",
+        (room_id, username),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
 
 @socketio.on("connect")
 def handle_connect():
@@ -493,7 +597,12 @@ def handle_join(data):
     if "user_id" not in session:
         return
     room_id = (data or {}).get("room_id")
-    if room_id is not None:
+    if room_id is None:
+        return
+    conn = get_db()
+    allowed = bool(session.get("is_admin")) or is_room_member(conn, room_id, session["username"])
+    conn.close()
+    if allowed:
         join_room(str(room_id))
 
 @socketio.on("leave")
@@ -512,6 +621,11 @@ def handle_send_message(data):
         return
 
     conn = get_db()
+    allowed = bool(session.get("is_admin")) or is_room_member(conn, room_id, session["username"])
+    if not allowed:
+        conn.close()
+        return
+
     cur = conn.execute(
         "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
         (session["username"], content, room_id),
