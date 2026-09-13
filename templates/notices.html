@@ -12,7 +12,8 @@
     {% if notices %}
         <ul>
             {% for notice in notices %}
-            <li>
+            <li {% if loop.first %}class="notice-latest"{% endif %}>
+                {% if loop.first %}<span class="latest-badge">최신 공지</span>{% endif %}
                 <a href="/posts/{{ notice.id }}">{{ notice.title }}</a>
                 <div class="post-meta">
                     {% if notice.username %}{{ notice.username }}{% endif %} · {{ notice.created_at }}

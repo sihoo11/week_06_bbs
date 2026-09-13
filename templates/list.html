@@ -20,11 +20,6 @@
                 <a href="/posts/{{ notices[0].id }}" class="notice-title">{{ notices[0].title }}</a>
                 <span class="notice-date">{{ notices[0].created_at }}</span>
             </div>
-            {% if notices | length > 1 %}
-                <div class="notice-more">
-                    <a href="/notices">공지 목록 보기 ({{ notices | length }}개)</a>
-                </div>
-            {% endif %}
         {% else %}
             <div class="notice-empty">공지없음</div>
         {% endif %}
