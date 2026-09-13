@@ -9,18 +9,38 @@
 {% block content %}
     <h1>💬 채팅방 목록</h1>
 
-    <form method="POST" class="search-form">
+    <form method="POST" class="search-form" id="create-room-form">
         <input type="text" name="name" placeholder="새 채팅방 이름" required>
         <button type="submit" style="width: auto; padding: 8px 16px;">방 만들기</button>
     </form>
 
+    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; margin-bottom: 20px; margin-top: -14px;">
+        <input type="checkbox" name="is_public" form="create-room-form"> 공개방으로 만들기 (초대 없이 누구나 참여 가능)
+    </label>
+
     {% if rooms %}
         <ul>
             {% for room in rooms %}
-            <li style="display: flex; justify-content: space-between; align-items: center;">
-                <a href="/chat/{{ room.id }}">🗨️ {{ room.name }}</a>
+            <li style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <span>
+                    {% if room.is_member or session.get('is_admin') %}
+                        <a href="/chat/{{ room.id }}">🗨️ {{ room.name }}</a>
+                    {% else %}
+                        🗨️ {{ room.name }}
+                    {% endif %}
+                    {% if room.is_public %}
+                        <span class="timeout-badge" style="background: #dcfce7; color: #166534;">🌐 공개</span>
+                    {% else %}
+                        <span class="timeout-badge">🔒 초대전용</span>
+                    {% endif %}
+                </span>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <span class="post-meta">{{ room.created_by }} · {{ room.created_at }}</span>
+                    {% if not room.is_member and room.is_public and not session.get('is_admin') %}
+                    <form method="POST" action="/chat/{{ room.id }}/join">
+                        <button type="submit" class="room-manage-btn">참여하기</button>
+                    </form>
+                    {% endif %}
                     {% if room.created_by == session.get('username') or session.get('is_admin') %}
                     <a href="/chat/{{ room.id }}/members" class="room-manage-btn">👥 멤버 관리</a>
                     <form method="POST" action="/chat/rooms/{{ room.id }}/delete" onsubmit="return confirm('방을 삭제하시겠습니까? 방의 모든 메시지도 함께 삭제됩니다.')">

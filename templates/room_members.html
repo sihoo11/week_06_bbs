@@ -13,6 +13,27 @@
     <div class="error-message">❌ {{ error }}</div>
     {% endif %}
 
+    <div class="room-settings">
+        <div class="room-setting-row">
+            <span class="room-setting-label">
+                {% if room.is_public %}🌐 공개방{% else %}🔒 초대전용 방{% endif %}
+            </span>
+            <form method="POST" action="/chat/{{ room.id }}/visibility">
+                <button type="submit" class="room-manage-btn">
+                    {% if room.is_public %}초대전용으로 전환{% else %}공개방으로 전환{% endif %}
+                </button>
+            </form>
+        </div>
+        <div class="room-setting-row">
+            <span class="room-setting-label">🐢 슬로우 모드</span>
+            <form method="POST" action="/chat/{{ room.id }}/slowmode" style="display: flex; gap: 6px; align-items: center;">
+                <input type="number" name="seconds" min="0" value="{{ room.slow_mode_seconds }}" style="width: 70px; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                <span style="font-size: 12px; color: #9ca3af;">초 (0 = 끄기)</span>
+                <button type="submit" class="room-manage-btn">적용</button>
+            </form>
+        </div>
+    </div>
+
     <form method="POST" class="search-form">
         <input type="text" name="username" placeholder="초대할 사용자 아이디" required>
         <button type="submit" style="width: auto; padding: 8px 16px;">초대하기</button>

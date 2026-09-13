@@ -4,11 +4,15 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import sqlite3
 from pathlib import Path
+from collections import defaultdict
 from opendata import fetch_air_quality
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
 socketio = SocketIO(app, async_mode="threading")
+
+# room_id(str) -> {sid: username}, 서버 메모리에만 유지되는 접속자 목록
+room_online_users = defaultdict(dict)
 
 DATABASE = Path(__file__).resolve().parent / 'bbs.db'
 
@@ -287,6 +291,9 @@ def create_tables():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             created_by TEXT,
+            is_public INTEGER NOT NULL DEFAULT 0,
+            slow_mode_seconds INTEGER NOT NULL DEFAULT 0,
+            pinned_message_id INTEGER,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         )
     """)
@@ -306,6 +313,9 @@ def create_tables():
         "ALTER TABLE posts ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_messages ADD COLUMN room_id INTEGER",
         "ALTER TABLE chat_room_members ADD COLUMN timeout_until TEXT",
+        "ALTER TABLE chat_rooms ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE chat_rooms ADD COLUMN slow_mode_seconds INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE chat_rooms ADD COLUMN pinned_message_id INTEGER",
     ]:
         try:
             conn.execute(statement)
@@ -459,11 +469,12 @@ def chat_rooms():
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
+        is_public = 1 if request.form.get("is_public") else 0
         if name:
             conn = get_db()
             cur = conn.execute(
-                "INSERT INTO chat_rooms (name, created_by) VALUES (?, ?)",
-                (name, session["username"]),
+                "INSERT INTO chat_rooms (name, created_by, is_public) VALUES (?, ?, ?)",
+                (name, session["username"], is_public),
             )
             conn.execute(
                 "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
@@ -474,18 +485,55 @@ def chat_rooms():
         return redirect("/chat")
 
     conn = get_db()
+    member_flag_sql = """
+        CASE WHEN EXISTS (
+            SELECT 1 FROM chat_room_members m
+            WHERE m.room_id = chat_rooms.id AND m.username = ?
+        ) THEN 1 ELSE 0 END AS is_member
+    """
     if session.get("is_admin"):
-        rooms = conn.execute("SELECT * FROM chat_rooms ORDER BY id DESC").fetchall()
-    else:
-        rooms = conn.execute("""
-            SELECT chat_rooms.*
+        rooms = conn.execute(f"""
+            SELECT chat_rooms.*, {member_flag_sql}
             FROM chat_rooms
-            JOIN chat_room_members ON chat_rooms.id = chat_room_members.room_id
-            WHERE chat_room_members.username = ?
             ORDER BY chat_rooms.id DESC
+        """, (session["username"],)).fetchall()
+    else:
+        rooms = conn.execute(f"""
+            SELECT * FROM (
+                SELECT chat_rooms.*, {member_flag_sql}
+                FROM chat_rooms
+            )
+            WHERE is_member = 1 OR is_public = 1
+            ORDER BY id DESC
         """, (session["username"],)).fetchall()
     conn.close()
     return render_template("chat_rooms.html", rooms=rooms)
+
+@app.route("/chat/<int:room_id>/join", methods=["POST"])
+def join_room_self(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    if not room["is_public"] and not session.get("is_admin"):
+        conn.close()
+        return "초대된 사용자만 입장할 수 있습니다.", 403
+
+    try:
+        conn.execute(
+            "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
+            (room_id, session["username"]),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    conn.close()
+    return redirect(url_for("chat_room", room_id=room_id))
 
 @app.route("/chat/rooms/<int:room_id>/delete", methods=["POST"])
 def delete_room(room_id):
@@ -523,18 +571,40 @@ def chat_room(room_id):
         return "방 없음", 404
 
     is_admin = bool(session.get("is_admin"))
-    if not is_admin and not is_room_member(conn, room_id, session["username"]):
-        conn.close()
-        return "초대된 사용자만 입장할 수 있습니다.", 403
+    member = is_room_member(conn, room_id, session["username"])
+
+    if not is_admin and not member:
+        if not room["is_public"]:
+            conn.close()
+            return "초대된 사용자만 입장할 수 있습니다.", 403
+        try:
+            conn.execute(
+                "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
+                (room_id, session["username"]),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass
 
     rows = conn.execute(
         "SELECT * FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT 100",
         (room_id,),
     ).fetchall()
+
+    pinned = None
+    if room["pinned_message_id"]:
+        pinned = conn.execute(
+            "SELECT * FROM chat_messages WHERE id = ?", (room["pinned_message_id"],)
+        ).fetchone()
+
     conn.close()
 
+    is_owner = room["created_by"] == session.get("username")
     messages = list(reversed(rows))
-    return render_template("chat.html", room=room, messages=messages)
+    return render_template(
+        "chat.html", room=room, messages=messages, pinned=pinned,
+        is_owner=is_owner,
+    )
 
 @app.route("/chat/<int:room_id>/members", methods=["GET", "POST"])
 def room_members(room_id):
@@ -671,10 +741,64 @@ def untimeout_room_member(room_id, username):
     conn.close()
     return redirect(url_for("room_members", room_id=room_id))
 
+@app.route("/chat/<int:room_id>/visibility", methods=["POST"])
+def toggle_room_visibility(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 변경할 수 있습니다.", 403
+
+    new_value = 0 if room["is_public"] else 1
+    conn.execute("UPDATE chat_rooms SET is_public = ? WHERE id = ?", (new_value, room_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/slowmode", methods=["POST"])
+def set_slow_mode(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "방을 만든 사람 또는 관리자만 변경할 수 있습니다.", 403
+
+    try:
+        seconds = max(0, int(request.form.get("seconds", 0)))
+    except ValueError:
+        seconds = 0
+
+    conn.execute("UPDATE chat_rooms SET slow_mode_seconds = ? WHERE id = ?", (seconds, room_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
 @socketio.on("connect")
 def handle_connect():
     if "user_id" not in session:
         return False
+
+def broadcast_online_users(room_id_str):
+    usernames = sorted(set(room_online_users[room_id_str].values()))
+    emit("online_users", {"usernames": usernames}, room=room_id_str)
 
 @socketio.on("join")
 def handle_join(data):
@@ -687,13 +811,27 @@ def handle_join(data):
     allowed = bool(session.get("is_admin")) or is_room_member(conn, room_id, session["username"])
     conn.close()
     if allowed:
-        join_room(str(room_id))
+        room_id_str = str(room_id)
+        join_room(room_id_str)
+        room_online_users[room_id_str][request.sid] = session["username"]
+        broadcast_online_users(room_id_str)
 
 @socketio.on("leave")
 def handle_leave(data):
     room_id = (data or {}).get("room_id")
     if room_id is not None:
-        leave_room(str(room_id))
+        room_id_str = str(room_id)
+        leave_room(room_id_str)
+        room_online_users[room_id_str].pop(request.sid, None)
+        broadcast_online_users(room_id_str)
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    sid = request.sid
+    for room_id_str, sids in list(room_online_users.items()):
+        if sid in sids:
+            sids.pop(sid, None)
+            broadcast_online_users(room_id_str)
 
 @socketio.on("send_message")
 def handle_send_message(data):
@@ -705,7 +843,13 @@ def handle_send_message(data):
         return
 
     conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return
+
     is_admin = bool(session.get("is_admin"))
+    is_owner = room["created_by"] == session.get("username")
     allowed = is_admin or is_room_member(conn, room_id, session["username"])
     if not allowed:
         conn.close()
@@ -715,6 +859,26 @@ def handle_send_message(data):
         conn.close()
         emit("timeout_error", {"message": "타임아웃 상태에서는 메시지를 보낼 수 없습니다."})
         return
+
+    if not is_admin and not is_owner and room["slow_mode_seconds"] > 0:
+        blocked = conn.execute("""
+            SELECT 1 FROM chat_messages
+            WHERE room_id = ? AND username = ?
+            ORDER BY id DESC LIMIT 1
+        """, (room_id, session["username"])).fetchone()
+        if blocked:
+            still_waiting = conn.execute("""
+                SELECT datetime(created_at, '+' || ? || ' seconds') > datetime('now', 'localtime') AS waiting
+                FROM chat_messages
+                WHERE room_id = ? AND username = ?
+                ORDER BY id DESC LIMIT 1
+            """, (room["slow_mode_seconds"], room_id, session["username"])).fetchone()
+            if still_waiting["waiting"]:
+                conn.close()
+                emit("slowmode_error", {
+                    "message": f"슬로우 모드: {room['slow_mode_seconds']}초마다 한 번만 보낼 수 있습니다."
+                })
+                return
 
     cur = conn.execute(
         "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
@@ -754,6 +918,62 @@ def handle_delete_message(data):
     conn.commit()
     conn.close()
     emit("message_deleted", {"id": message_id}, room=str(room_id))
+
+@socketio.on("pin_message")
+def handle_pin_message(data):
+    if "user_id" not in session:
+        return
+    message_id = (data or {}).get("id")
+
+    conn = get_db()
+    message = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    if message is None or message["room_id"] is None:
+        conn.close()
+        return
+
+    room_id = message["room_id"]
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    is_owner = room and room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return
+
+    conn.execute("UPDATE chat_rooms SET pinned_message_id = ? WHERE id = ?", (message_id, room_id))
+    conn.commit()
+    conn.close()
+
+    emit("message_pinned", {
+        "id": message["id"],
+        "username": message["username"],
+        "content": message["content"],
+        "created_at": message["created_at"],
+    }, room=str(room_id))
+
+@socketio.on("unpin_message")
+def handle_unpin_message(data):
+    if "user_id" not in session:
+        return
+    room_id = (data or {}).get("room_id")
+    if room_id is None:
+        return
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return
+
+    conn.execute("UPDATE chat_rooms SET pinned_message_id = NULL WHERE id = ?", (room_id,))
+    conn.commit()
+    conn.close()
+    emit("message_unpinned", {}, room=str(room_id))
 
 if __name__ == '__main__' :
     create_tables()

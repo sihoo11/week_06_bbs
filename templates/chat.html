@@ -5,12 +5,24 @@
 {% block nav_left %}
     <a href="/chat">← 채팅방 목록</a>
     {% if room.created_by == session.get('username') or session.get('is_admin') %}
-        <a href="/chat/{{ room.id }}/members">👥 멤버 관리</a>
+        <a href="/chat/{{ room.id }}/members" class="room-manage-btn">👥 멤버 관리</a>
     {% endif %}
 {% endblock %}
 
 {% block content %}
     <h1>🗨️ {{ room.name }}</h1>
+
+    <div class="online-users" id="online-users">
+        <span class="online-dot"></span>접속 중: <span id="online-list">-</span>
+    </div>
+
+    <div class="pinned-bar" id="pinned-bar" {% if not pinned %}hidden{% endif %}>
+        <span class="pinned-label">📌 고정됨</span>
+        <span class="pinned-content" id="pinned-content">{% if pinned %}{{ pinned.username }}: {{ pinned.content }}{% endif %}</span>
+        {% if is_owner or session.get('is_admin') %}
+        <button type="button" class="room-manage-btn" id="unpin-btn">고정 해제</button>
+        {% endif %}
+    </div>
 
     <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
@@ -22,6 +34,9 @@
                 </div>
                 <div style="display: flex; align-items: flex-end; gap: 6px;">
                     <p class="comment-content">{{ m.content }}</p>
+                    {% if is_owner or session.get('is_admin') %}
+                    <button type="button" class="pin-btn chat-pin-btn" data-id="{{ m.id }}" title="고정">📌</button>
+                    {% endif %}
                     {% if m.username == session.get('username') or session.get('is_admin') %}
                     <button type="button" class="comment-delete-btn chat-delete-btn" data-id="{{ m.id }}">✕</button>
                     {% endif %}
@@ -44,9 +59,15 @@
     const ROOM_ID = {{ room.id | tojson }};
     const CURRENT_USERNAME = {{ session.get('username') | tojson }};
     const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
+    const IS_OWNER = {{ (is_owner or false) | tojson }};
+    const CAN_MANAGE = IS_ADMIN || IS_OWNER;
     const messagesEl = document.getElementById('chat-messages');
     const formEl = document.getElementById('chat-form');
     const inputEl = document.getElementById('chat-input');
+    const onlineListEl = document.getElementById('online-list');
+    const pinnedBarEl = document.getElementById('pinned-bar');
+    const pinnedContentEl = document.getElementById('pinned-content');
+    const unpinBtnEl = document.getElementById('unpin-btn');
 
     socket.on('connect', () => {
         socket.emit('join', { room_id: ROOM_ID });
@@ -66,6 +87,7 @@
         const div = document.createElement('div');
         div.className = 'chat-message' + (msg.username === CURRENT_USERNAME ? ' own' : '');
         div.dataset.id = msg.id;
+        const pinBtn = CAN_MANAGE ? `<button type="button" class="pin-btn chat-pin-btn" data-id="${msg.id}" title="고정">📌</button>` : '';
         const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">✕</button>` : '';
         div.innerHTML = `
             <div class="comment-header">
@@ -74,6 +96,7 @@
             </div>
             <div style="display: flex; align-items: flex-end; gap: 6px;">
                 <p class="comment-content"></p>
+                ${pinBtn}
                 ${deleteBtn}
             </div>
         `;
@@ -101,7 +124,17 @@
             const id = Number(e.target.dataset.id);
             socket.emit('delete_message', { id });
         }
+        if (e.target.matches('.chat-pin-btn')) {
+            const id = Number(e.target.dataset.id);
+            socket.emit('pin_message', { id });
+        }
     });
+
+    if (unpinBtnEl) {
+        unpinBtnEl.addEventListener('click', () => {
+            socket.emit('unpin_message', { room_id: ROOM_ID });
+        });
+    }
 
     socket.on('new_message', appendMessage);
 
@@ -112,6 +145,23 @@
 
     socket.on('timeout_error', ({ message }) => {
         alert(message);
+    });
+
+    socket.on('slowmode_error', ({ message }) => {
+        alert(message);
+    });
+
+    socket.on('online_users', ({ usernames }) => {
+        onlineListEl.textContent = usernames.length ? usernames.join(', ') : '-';
+    });
+
+    socket.on('message_pinned', (msg) => {
+        pinnedContentEl.textContent = `${msg.username}: ${msg.content}`;
+        pinnedBarEl.hidden = false;
+    });
+
+    socket.on('message_unpinned', () => {
+        pinnedBarEl.hidden = true;
     });
 
     messagesEl.scrollTop = messagesEl.scrollHeight;
