@@ -1,22 +1,24 @@
 {% extends "base.html" %}
 
-{% block title %}{{ room.name }} - 멤버 관리{% endblock %}
+{% block title %}{{ room.name }} - 방 설정{% endblock %}
 
 {% block nav_left %}
     <a href="/chat/{{ room.id }}">← {{ room.name }}</a>
 {% endblock %}
 
 {% block content %}
-    <h1>👥 {{ room.name }} - 멤버 관리</h1>
+    <h1>⚙️ {{ room.name }} - 방 설정</h1>
 
     {% if error %}
     <div class="error-message">❌ {{ error }}</div>
     {% endif %}
 
+    <h2 class="section-heading">🔧 방 정보</h2>
     <div class="room-settings">
         <div class="room-setting-row">
             <span class="room-setting-label">
                 {% if room.is_public %}🌐 공개방{% else %}🔒 초대전용 방{% endif %}
+                <span style="font-weight: 400; color: #9ca3af;">— 언제든지 전환할 수 있어요</span>
             </span>
             <form method="POST" action="/chat/{{ room.id }}/visibility">
                 <button type="submit" class="room-manage-btn">
@@ -34,6 +36,7 @@
         </div>
     </div>
 
+    <h2 class="section-heading">👥 멤버 관리</h2>
     <form method="POST" class="search-form">
         <input type="text" name="username" placeholder="초대할 사용자 아이디" required>
         <button type="submit" style="width: auto; padding: 8px 16px;">초대하기</button>
