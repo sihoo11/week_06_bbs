@@ -32,8 +32,12 @@ def index():
             ORDER BY posts.is_notice DESC, posts.id DESC
         """).fetchall()
 
+    user = None
+    if "user_id" in session:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+
     conn.close()
-    return render_template("list.html", posts=posts, q=q)
+    return render_template("list.html", posts=posts, q=q, user=user)
 
 @app.route("/posts/<int:post_id>")
 def detail(post_id):
@@ -304,6 +308,85 @@ def delete_comment(comment_id):
     conn.commit()
     conn.close()
     return redirect(url_for("detail", post_id=comment["post_id"]))
+
+@app.route("/notice/new", methods=["GET", "POST"])
+def new_notice():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    conn.close()
+
+    if not (user and user["is_admin"]):
+        return "관리자만 공지를 작성할 수 있습니다.", 403
+
+    if request.method == "POST":
+        title = request.form["title"]
+        content = request.form["content"]
+        user_id = session["user_id"]
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO posts (title, content, user_id, is_notice) VALUES (?, ?, ?, ?)",
+            (title, content, user_id, 1)
+        )
+        conn.commit()
+        conn.close()
+        return redirect("/")
+
+    return render_template("notice_new.html")
+
+@app.route("/notice/<int:post_id>/edit", methods=["GET", "POST"])
+def edit_notice(post_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    conn.close()
+
+    if not post or not post["is_notice"]:
+        return "공지를 찾을 수 없습니다.", 404
+
+    if not (user and user["is_admin"]):
+        return "관리자만 공지를 수정할 수 있습니다.", 403
+
+    if request.method == "POST":
+        title = request.form["title"]
+        content = request.form["content"]
+        conn = get_db()
+        conn.execute(
+            "UPDATE posts SET title = ?, content = ? WHERE id = ?",
+            (title, content, post_id)
+        )
+        conn.commit()
+        conn.close()
+        return redirect(url_for('detail', post_id=post_id))
+
+    return render_template('notice_edit.html', post=post)
+
+@app.route("/notice/<int:post_id>/delete", methods=["POST"])
+def delete_notice(post_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    conn.close()
+
+    if not post or not post["is_notice"]:
+        return "공지를 찾을 수 없습니다.", 404
+
+    if not (user and user["is_admin"]):
+        return "관리자만 공지를 삭제할 수 있습니다.", 403
+
+    conn = get_db()
+    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
 
 @app.route("/dashboard")
 def dashboard():

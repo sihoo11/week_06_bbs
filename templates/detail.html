@@ -8,6 +8,9 @@
     </div>
 
     <div class="post-header">
+        {% if post.is_notice %}
+            <span class="notice-badge">📢 공지</span>
+        {% endif %}
         <h1>{{ post.title }}</h1>
         <div class="post-meta">
             {% if author %}{{ author.username }}{% endif %} · {{ post.created_at }}
@@ -20,10 +23,17 @@
 
     {% if session.get("user_id") == post.user_id or (user and user.is_admin) %}
     <div class="post-actions">
-        <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
-        <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
-            <button type="submit" class="delete-btn">🗑️ 삭제</button>
-        </form>
+        {% if post.is_notice %}
+            <a href="/notice/{{ post.id }}/edit">✏️ 수정</a>
+            <form method="POST" action="/notice/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
+                <button type="submit" class="delete-btn">🗑️ 삭제</button>
+            </form>
+        {% else %}
+            <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
+            <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
+                <button type="submit" class="delete-btn">🗑️ 삭제</button>
+            </form>
+        {% endif %}
     </div>
     {% endif %}
 
