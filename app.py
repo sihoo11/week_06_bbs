@@ -42,8 +42,9 @@ def detail(post_id):
         return "글 없음", 404
 
     conn = get_db()
+    author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
     comments = conn.execute("""
-        SELECT comments.*, users.username
+        SELECT comments.*, users.username, users.is_admin
         FROM comments
         LEFT JOIN users ON comments.user_id = users.id
         WHERE comments.post_id = ?
@@ -51,7 +52,7 @@ def detail(post_id):
     """, (post_id,)).fetchall()
     conn.close()
 
-    return render_template("detail.html", post=post, comments=comments)
+    return render_template("detail.html", post=post, author=author, comments=comments)
 
 @app.route("/new", methods=["GET", "POST"])
 def new():
