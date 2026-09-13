@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}실시간 채팅{% endblock %}
+{% block title %}{{ room.name }}{% endblock %}
 
 {% block nav_left %}
-    <a href="/">← 목록으로</a>
+    <a href="/chat">← 채팅방 목록</a>
 {% endblock %}
 
 {% block content %}
-    <h1>💬 실시간 채팅</h1>
+    <h1>🗨️ {{ room.name }}</h1>
 
     <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
@@ -38,11 +38,16 @@
 <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 <script>
     const socket = io();
+    const ROOM_ID = {{ room.id | tojson }};
     const CURRENT_USERNAME = {{ session.get('username') | tojson }};
     const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
     const messagesEl = document.getElementById('chat-messages');
     const formEl = document.getElementById('chat-form');
     const inputEl = document.getElementById('chat-input');
+
+    socket.on('connect', () => {
+        socket.emit('join', { room_id: ROOM_ID });
+    });
 
     function canDelete(username) {
         return IS_ADMIN || username === CURRENT_USERNAME;
@@ -83,7 +88,7 @@
         e.preventDefault();
         const content = inputEl.value.trim();
         if (!content) return;
-        socket.emit('send_message', { content });
+        socket.emit('send_message', { room_id: ROOM_ID, content });
         inputEl.value = '';
         inputEl.style.height = 'auto';
     });

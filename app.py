@@ -1,5 +1,5 @@
 from flask import Flask, session, request, render_template, redirect, url_for
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import sqlite3
@@ -258,11 +258,20 @@ def create_tables():
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_by TEXT,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
         "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
         "ALTER TABLE posts ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE chat_messages ADD COLUMN room_id INTEGER",
     ]:
         try:
             conn.execute(statement)
@@ -409,37 +418,103 @@ def dashboard():
     rows, source = fetch_air_quality(sido)
     return render_template('dashboard.html', rows=rows, sido=sido, source=source)
 
-@app.route("/chat")
-def chat():
+@app.route("/chat", methods=["GET", "POST"])
+def chat_rooms():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if name:
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO chat_rooms (name, created_by) VALUES (?, ?)",
+                (name, session["username"]),
+            )
+            conn.commit()
+            conn.close()
+        return redirect("/chat")
+
+    conn = get_db()
+    rooms = conn.execute("SELECT * FROM chat_rooms ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template("chat_rooms.html", rooms=rooms)
+
+@app.route("/chat/rooms/<int:room_id>/delete", methods=["POST"])
+def delete_room(room_id):
     if "user_id" not in session:
         return redirect("/login")
 
     conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    is_owner = room["created_by"] == session.get("username")
+    is_admin = bool(session.get("is_admin"))
+    if not (is_owner or is_admin):
+        conn.close()
+        return "본인 또는 관리자만 삭제 가능합니다.", 403
+
+    conn.execute("DELETE FROM chat_rooms WHERE id = ?", (room_id,))
+    conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (room_id,))
+    conn.commit()
+    conn.close()
+    return redirect("/chat")
+
+@app.route("/chat/<int:room_id>")
+def chat_room(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
     rows = conn.execute(
-        "SELECT * FROM chat_messages ORDER BY id DESC LIMIT 100"
+        "SELECT * FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT 100",
+        (room_id,),
     ).fetchall()
     conn.close()
 
     messages = list(reversed(rows))
-    return render_template("chat.html", messages=messages)
+    return render_template("chat.html", room=room, messages=messages)
 
 @socketio.on("connect")
 def handle_connect():
     if "user_id" not in session:
         return False
 
+@socketio.on("join")
+def handle_join(data):
+    if "user_id" not in session:
+        return
+    room_id = (data or {}).get("room_id")
+    if room_id is not None:
+        join_room(str(room_id))
+
+@socketio.on("leave")
+def handle_leave(data):
+    room_id = (data or {}).get("room_id")
+    if room_id is not None:
+        leave_room(str(room_id))
+
 @socketio.on("send_message")
 def handle_send_message(data):
     if "user_id" not in session:
         return
+    room_id = (data or {}).get("room_id")
     content = (data or {}).get("content", "").strip()
-    if not content:
+    if not content or room_id is None:
         return
 
     conn = get_db()
     cur = conn.execute(
-        "INSERT INTO chat_messages (username, content) VALUES (?, ?)",
-        (session["username"], content),
+        "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
+        (session["username"], content, room_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -450,7 +525,7 @@ def handle_send_message(data):
         "username": row["username"],
         "content": row["content"],
         "created_at": row["created_at"],
-    }, broadcast=True)
+    }, room=str(room_id))
 
 @socketio.on("delete_message")
 def handle_delete_message(data):
@@ -470,10 +545,11 @@ def handle_delete_message(data):
         conn.close()
         return
 
+    room_id = message["room_id"]
     conn.execute("DELETE FROM chat_messages WHERE id = ?", (message_id,))
     conn.commit()
     conn.close()
-    emit("message_deleted", {"id": message_id}, broadcast=True)
+    emit("message_deleted", {"id": message_id}, room=str(room_id))
 
 if __name__ == '__main__' :
     create_tables()

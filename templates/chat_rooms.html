@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}채팅방 목록{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 목록으로</a>
+{% endblock %}
+
+{% block content %}
+    <h1>💬 채팅방 목록</h1>
+
+    <form method="POST" class="post-form" style="margin-bottom: 30px;">
+        <div style="display: flex; gap: 8px;">
+            <input type="text" name="name" placeholder="새 채팅방 이름" required style="flex: 1;">
+            <button type="submit">방 만들기</button>
+        </div>
+    </form>
+
+    {% if rooms %}
+        <ul>
+            {% for room in rooms %}
+            <li style="display: flex; justify-content: space-between; align-items: center;">
+                <a href="/chat/{{ room.id }}">🗨️ {{ room.name }}</a>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span class="post-meta">{{ room.created_by }} · {{ room.created_at }}</span>
+                    {% if room.created_by == session.get('username') or session.get('is_admin') %}
+                    <form method="POST" action="/chat/rooms/{{ room.id }}/delete" onsubmit="return confirm('방을 삭제하시겠습니까? 방의 모든 메시지도 함께 삭제됩니다.')">
+                        <button type="submit" class="comment-delete-btn">삭제</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <div style="text-align: center; color: #9ca3af; padding: 40px; font-size: 14px;">
+            아직 채팅방이 없습니다. 새로 만들어보세요!
+        </div>
+    {% endif %}
+{% endblock %}
