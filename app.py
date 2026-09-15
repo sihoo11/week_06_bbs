@@ -2,6 +2,7 @@ from flask import Flask, session, request, render_template, redirect, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+import re
 import sqlite3
 from pathlib import Path
 from collections import defaultdict
@@ -245,6 +246,23 @@ def is_timed_out(conn, room_id, username):
 
 TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
 
+ROOM_PERMISSION_KEYS = ["manage_room", "manage_members", "manage_messages", "announce", "manage_roles"]
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+def get_effective_permissions(conn, room, username):
+    if bool(session.get("is_admin")) or room["created_by"] == username:
+        return {key: True for key in ROOM_PERMISSION_KEYS}
+
+    role = conn.execute("""
+        SELECT r.* FROM chat_room_members m
+        JOIN chat_room_roles r ON r.id = m.role_id
+        WHERE m.room_id = ? AND m.username = ?
+    """, (room["id"], username)).fetchone()
+
+    if role is None:
+        return {key: False for key in ROOM_PERMISSION_KEYS}
+    return {key: bool(role[f"perm_{key}"]) for key in ROOM_PERMISSION_KEYS}
+
 def create_tables():
     conn = get_db()
     conn.execute("""
@@ -306,6 +324,20 @@ def create_tables():
             UNIQUE(room_id, username)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_room_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#6b7280',
+            perm_manage_room INTEGER NOT NULL DEFAULT 0,
+            perm_manage_members INTEGER NOT NULL DEFAULT 0,
+            perm_manage_messages INTEGER NOT NULL DEFAULT 0,
+            perm_announce INTEGER NOT NULL DEFAULT 0,
+            perm_manage_roles INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
@@ -316,6 +348,8 @@ def create_tables():
         "ALTER TABLE chat_rooms ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_rooms ADD COLUMN slow_mode_seconds INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_rooms ADD COLUMN pinned_message_id INTEGER",
+        "ALTER TABLE chat_rooms ADD COLUMN announcement TEXT",
+        "ALTER TABLE chat_room_members ADD COLUMN role_id INTEGER",
     ]:
         try:
             conn.execute(statement)
@@ -597,13 +631,16 @@ def chat_room(room_id):
             "SELECT * FROM chat_messages WHERE id = ?", (room["pinned_message_id"],)
         ).fetchone()
 
+    perms = get_effective_permissions(conn, room, session["username"])
     conn.close()
 
     is_owner = room["created_by"] == session.get("username")
     messages = list(reversed(rows))
     return render_template(
         "chat.html", room=room, messages=messages, pinned=pinned,
-        is_owner=is_owner,
+        is_owner=is_owner, can_announce=perms["announce"],
+        can_manage_settings=any(perms.values()),
+        can_manage_messages=perms["manage_messages"],
     )
 
 @app.route("/chat/<int:room_id>/members", methods=["GET", "POST"])
@@ -617,18 +654,25 @@ def room_members(room_id):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not any(perms.values()):
         conn.close()
-        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+        return "방 설정을 관리할 권한이 없습니다.", 403
 
     if request.method == "POST":
+        if not perms["manage_members"]:
+            conn.close()
+            return "멤버를 초대할 권한이 없습니다.", 403
+
         username = request.form.get("username", "").strip()
         target = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         if target is None:
+            roles = conn.execute("SELECT * FROM chat_room_roles WHERE room_id = ? ORDER BY id ASC", (room_id,)).fetchall()
             conn.close()
-            return render_template("room_members.html", room=room, members=[], error="존재하지 않는 사용자입니다.")
+            return render_template(
+                "room_members.html", room=room, members=[], roles=roles, perms=perms,
+                error="존재하지 않는 사용자입니다.",
+            )
         try:
             conn.execute(
                 "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
@@ -641,15 +685,18 @@ def room_members(room_id):
         return redirect(url_for("room_members", room_id=room_id))
 
     members = conn.execute("""
-        SELECT username, timeout_until,
-               CASE WHEN timeout_until IS NOT NULL AND timeout_until > datetime('now', 'localtime')
+        SELECT m.username, m.timeout_until, m.role_id,
+               r.name AS role_name, r.color AS role_color,
+               CASE WHEN m.timeout_until IS NOT NULL AND m.timeout_until > datetime('now', 'localtime')
                     THEN 1 ELSE 0 END AS is_timed_out
-        FROM chat_room_members
-        WHERE room_id = ?
-        ORDER BY id ASC
+        FROM chat_room_members m
+        LEFT JOIN chat_room_roles r ON r.id = m.role_id
+        WHERE m.room_id = ?
+        ORDER BY m.id ASC
     """, (room_id,)).fetchall()
+    roles = conn.execute("SELECT * FROM chat_room_roles WHERE room_id = ? ORDER BY id ASC", (room_id,)).fetchall()
     conn.close()
-    return render_template("room_members.html", room=room, members=members)
+    return render_template("room_members.html", room=room, members=members, roles=roles, perms=perms)
 
 @app.route("/chat/<int:room_id>/members/<username>/remove", methods=["POST"])
 def remove_room_member(room_id, username):
@@ -662,11 +709,10 @@ def remove_room_member(room_id, username):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_members"]:
         conn.close()
-        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+        return "멤버를 관리할 권한이 없습니다.", 403
 
     if username == room["created_by"]:
         conn.close()
@@ -691,11 +737,10 @@ def timeout_room_member(room_id, username):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_members"]:
         conn.close()
-        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+        return "멤버를 관리할 권한이 없습니다.", 403
 
     if username == room["created_by"]:
         conn.close()
@@ -727,11 +772,10 @@ def untimeout_room_member(room_id, username):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_members"]:
         conn.close()
-        return "방을 만든 사람 또는 관리자만 멤버를 관리할 수 있습니다.", 403
+        return "멤버를 관리할 권한이 없습니다.", 403
 
     conn.execute(
         "UPDATE chat_room_members SET timeout_until = NULL WHERE room_id = ? AND username = ?",
@@ -752,11 +796,10 @@ def toggle_room_visibility(room_id):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_room"]:
         conn.close()
-        return "방을 만든 사람 또는 관리자만 변경할 수 있습니다.", 403
+        return "방 설정을 변경할 권한이 없습니다.", 403
 
     new_value = 0 if room["is_public"] else 1
     conn.execute("UPDATE chat_rooms SET is_public = ? WHERE id = ?", (new_value, room_id))
@@ -775,11 +818,10 @@ def set_slow_mode(room_id):
         conn.close()
         return "방 없음", 404
 
-    is_owner = room["created_by"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_room"]:
         conn.close()
-        return "방을 만든 사람 또는 관리자만 변경할 수 있습니다.", 403
+        return "방 설정을 변경할 권한이 없습니다.", 403
 
     try:
         seconds = max(0, int(request.form.get("seconds", 0)))
@@ -787,6 +829,143 @@ def set_slow_mode(room_id):
         seconds = 0
 
     conn.execute("UPDATE chat_rooms SET slow_mode_seconds = ? WHERE id = ?", (seconds, room_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/roles", methods=["POST"])
+def create_room_role(room_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_roles"]:
+        conn.close()
+        return "역할을 관리할 권한이 없습니다.", 403
+
+    name = request.form.get("name", "").strip()
+    if not name:
+        conn.close()
+        return redirect(url_for("room_members", room_id=room_id))
+
+    color = request.form.get("color", "#6b7280").strip()
+    if not HEX_COLOR_RE.match(color):
+        color = "#6b7280"
+
+    conn.execute(
+        "INSERT INTO chat_room_roles (room_id, name, color) VALUES (?, ?, ?)",
+        (room_id, name, color),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/roles/<int:role_id>/update", methods=["POST"])
+def update_room_role(room_id, role_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_roles"]:
+        conn.close()
+        return "역할을 관리할 권한이 없습니다.", 403
+
+    role = conn.execute(
+        "SELECT * FROM chat_room_roles WHERE id = ? AND room_id = ?", (role_id, room_id)
+    ).fetchone()
+    if role is None:
+        conn.close()
+        return "역할을 찾을 수 없습니다.", 404
+
+    name = request.form.get("name", "").strip() or role["name"]
+    color = request.form.get("color", role["color"]).strip()
+    if not HEX_COLOR_RE.match(color):
+        color = role["color"]
+
+    perm_values = [1 if request.form.get(f"perm_{key}") == "on" else 0 for key in ROOM_PERMISSION_KEYS]
+
+    conn.execute("""
+        UPDATE chat_room_roles
+        SET name = ?, color = ?,
+            perm_manage_room = ?, perm_manage_members = ?, perm_manage_messages = ?,
+            perm_announce = ?, perm_manage_roles = ?
+        WHERE id = ?
+    """, (name, color, *perm_values, role_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/roles/<int:role_id>/delete", methods=["POST"])
+def delete_room_role(room_id, role_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_roles"]:
+        conn.close()
+        return "역할을 관리할 권한이 없습니다.", 403
+
+    conn.execute("UPDATE chat_room_members SET role_id = NULL WHERE role_id = ?", (role_id,))
+    conn.execute("DELETE FROM chat_room_roles WHERE id = ? AND room_id = ?", (role_id, room_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("room_members", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/members/<username>/role", methods=["POST"])
+def assign_room_member_role(room_id, username):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return "방 없음", 404
+
+    perms = get_effective_permissions(conn, room, session["username"])
+    if not perms["manage_roles"]:
+        conn.close()
+        return "역할을 관리할 권한이 없습니다.", 403
+
+    if username == room["created_by"]:
+        conn.close()
+        return "방을 만든 사람에게는 역할을 지정할 수 없습니다.", 400
+
+    role_id = request.form.get("role_id", "").strip()
+    if role_id:
+        role = conn.execute(
+            "SELECT * FROM chat_room_roles WHERE id = ? AND room_id = ?", (role_id, room_id)
+        ).fetchone()
+        if role is None:
+            conn.close()
+            return "역할을 찾을 수 없습니다.", 404
+        conn.execute(
+            "UPDATE chat_room_members SET role_id = ? WHERE room_id = ? AND username = ?",
+            (role_id, room_id, username),
+        )
+    else:
+        conn.execute(
+            "UPDATE chat_room_members SET role_id = NULL WHERE room_id = ? AND username = ?",
+            (room_id, username),
+        )
     conn.commit()
     conn.close()
     return redirect(url_for("room_members", room_id=room_id))
@@ -907,9 +1086,12 @@ def handle_delete_message(data):
         conn.close()
         return
 
-    is_owner = message["username"] == session.get("username")
-    is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    allowed = message["username"] == session.get("username")
+    if not allowed and message["room_id"] is not None:
+        room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (message["room_id"],)).fetchone()
+        if room is not None:
+            allowed = get_effective_permissions(conn, room, session["username"])["manage_messages"]
+    if not allowed:
         conn.close()
         return
 
@@ -932,10 +1114,9 @@ def handle_pin_message(data):
         return
 
     room_id = message["room_id"]
-    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
-    is_owner = room and room["created_by"] == session.get("username")
     is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    allowed = is_admin or is_room_member(conn, room_id, session["username"])
+    if not allowed:
         conn.close()
         return
 
@@ -964,9 +1145,9 @@ def handle_unpin_message(data):
         conn.close()
         return
 
-    is_owner = room["created_by"] == session.get("username")
     is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    allowed = is_admin or is_room_member(conn, room_id, session["username"])
+    if not allowed:
         conn.close()
         return
 
@@ -974,6 +1155,53 @@ def handle_unpin_message(data):
     conn.commit()
     conn.close()
     emit("message_unpinned", {}, room=str(room_id))
+
+@socketio.on("set_announcement")
+def handle_set_announcement(data):
+    if "user_id" not in session:
+        return
+    room_id = (data or {}).get("room_id")
+    content = (data or {}).get("content", "").strip()
+    if room_id is None or not content:
+        return
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return
+
+    if not get_effective_permissions(conn, room, session["username"])["announce"]:
+        conn.close()
+        return
+
+    conn.execute("UPDATE chat_rooms SET announcement = ? WHERE id = ?", (content, room_id))
+    conn.commit()
+    conn.close()
+    emit("announcement_set", {"content": content}, room=str(room_id))
+
+@socketio.on("clear_announcement")
+def handle_clear_announcement(data):
+    if "user_id" not in session:
+        return
+    room_id = (data or {}).get("room_id")
+    if room_id is None:
+        return
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return
+
+    if not get_effective_permissions(conn, room, session["username"])["announce"]:
+        conn.close()
+        return
+
+    conn.execute("UPDATE chat_rooms SET announcement = NULL WHERE id = ?", (room_id,))
+    conn.commit()
+    conn.close()
+    emit("announcement_cleared", {}, room=str(room_id))
 
 if __name__ == '__main__' :
     create_tables()

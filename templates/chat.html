@@ -4,7 +4,7 @@
 
 {% block nav_left %}
     <a href="/chat">← 채팅방 목록</a>
-    {% if room.created_by == session.get('username') or session.get('is_admin') %}
+    {% if can_manage_settings %}
         <a href="/chat/{{ room.id }}/members" class="room-manage-btn">⚙️ 방 설정</a>
     {% endif %}
 {% endblock %}
@@ -16,38 +16,48 @@
         <span class="online-dot"></span>접속 중: <span id="online-list">-</span>
     </div>
 
-    <div class="pinned-bar" id="pinned-bar" {% if not pinned %}hidden{% endif %}>
-        <span class="pinned-label">📌 고정됨</span>
-        <span class="pinned-content" id="pinned-content">{% if pinned %}{{ pinned.username }}: {{ pinned.content }}{% endif %}</span>
-        {% if is_owner or session.get('is_admin') %}
-        <button type="button" class="room-manage-btn" id="unpin-btn">고정 해제</button>
+    <div class="announcement-bar" id="announcement-bar" {% if not room.announcement %}hidden{% endif %}>
+        <span class="announcement-icon">📢</span>
+        <span class="announcement-text" id="announcement-text">{{ room.announcement or '' }}</span>
+        {% if can_announce %}
+        <button type="button" class="room-manage-btn" id="clear-announcement-btn">공지 해제</button>
         {% endif %}
+    </div>
+
+    <div class="pinned-bar" id="pinned-bar" {% if not pinned %}hidden{% endif %}>
+        <span class="pinned-icon">📌</span>
+        <span class="pinned-content" id="pinned-content">
+            {% if pinned %}<span class="pinned-author">{{ pinned.username }}</span><span class="pinned-text">{{ pinned.content }}</span>{% endif %}
+        </span>
+        <button type="button" class="room-manage-btn" id="unpin-btn">고정 해제</button>
     </div>
 
     <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
             {% for m in messages %}
-            <div class="chat-message{% if m.username == session.get('username') %} own{% endif %}" data-id="{{ m.id }}">
+            <div class="chat-message{% if m.username == session.get('username') %} own{% endif %}" data-id="{{ m.id }}" data-username="{{ m.username }}">
                 <div class="comment-header">
                     <span class="comment-author">{{ m.username }}</span>
                     <span class="comment-date">{{ m.created_at }}</span>
                 </div>
-                <div style="display: flex; align-items: flex-end; gap: 6px;">
-                    <p class="comment-content">{{ m.content }}</p>
-                    {% if is_owner or session.get('is_admin') %}
-                    <button type="button" class="pin-btn chat-pin-btn" data-id="{{ m.id }}" title="고정">📌</button>
-                    {% endif %}
-                    {% if m.username == session.get('username') or session.get('is_admin') %}
-                    <button type="button" class="comment-delete-btn chat-delete-btn" data-id="{{ m.id }}">✕</button>
-                    {% endif %}
-                </div>
+                <p class="comment-content">{{ m.content }}</p>
             </div>
             {% endfor %}
         </div>
 
+        <div class="chat-context-menu" id="chat-context-menu" hidden>
+            <button type="button" class="chat-context-item" id="ctx-pin-btn">📌 고정</button>
+            <button type="button" class="chat-context-item chat-context-item-danger" id="ctx-delete-btn">✕ 삭제</button>
+        </div>
+
         <form id="chat-form">
             <textarea id="chat-input" placeholder="메시지를 입력하세요..." required></textarea>
-            <button type="submit" title="전송">✈️</button>
+            <div class="chat-send-group">
+                {% if can_announce %}
+                <button type="button" id="announce-btn" class="chat-announce-btn" title="공지로 등록">📢</button>
+                {% endif %}
+                <button type="submit" title="전송">✈️</button>
+            </div>
         </form>
     </div>
 {% endblock %}
@@ -59,8 +69,7 @@
     const ROOM_ID = {{ room.id | tojson }};
     const CURRENT_USERNAME = {{ session.get('username') | tojson }};
     const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
-    const IS_OWNER = {{ (is_owner or false) | tojson }};
-    const CAN_MANAGE = IS_ADMIN || IS_OWNER;
+    const CAN_MANAGE_MESSAGES = {{ (can_manage_messages or false) | tojson }};
     const messagesEl = document.getElementById('chat-messages');
     const formEl = document.getElementById('chat-form');
     const inputEl = document.getElementById('chat-input');
@@ -68,13 +77,21 @@
     const pinnedBarEl = document.getElementById('pinned-bar');
     const pinnedContentEl = document.getElementById('pinned-content');
     const unpinBtnEl = document.getElementById('unpin-btn');
+    const announcementBarEl = document.getElementById('announcement-bar');
+    const announcementTextEl = document.getElementById('announcement-text');
+    const clearAnnouncementBtnEl = document.getElementById('clear-announcement-btn');
+    const announceBtnEl = document.getElementById('announce-btn');
+    const contextMenuEl = document.getElementById('chat-context-menu');
+    const ctxPinBtnEl = document.getElementById('ctx-pin-btn');
+    const ctxDeleteBtnEl = document.getElementById('ctx-delete-btn');
+    let contextMessageId = null;
 
     socket.on('connect', () => {
         socket.emit('join', { room_id: ROOM_ID });
     });
 
     function canDelete(username) {
-        return IS_ADMIN || username === CURRENT_USERNAME;
+        return IS_ADMIN || CAN_MANAGE_MESSAGES || username === CURRENT_USERNAME;
     }
 
     function escapeHtml(str) {
@@ -87,18 +104,13 @@
         const div = document.createElement('div');
         div.className = 'chat-message message-pop-in' + (msg.username === CURRENT_USERNAME ? ' own' : '');
         div.dataset.id = msg.id;
-        const pinBtn = CAN_MANAGE ? `<button type="button" class="pin-btn chat-pin-btn" data-id="${msg.id}" title="고정">📌</button>` : '';
-        const deleteBtn = canDelete(msg.username) ? `<button type="button" class="comment-delete-btn chat-delete-btn" data-id="${msg.id}">✕</button>` : '';
+        div.dataset.username = msg.username;
         div.innerHTML = `
             <div class="comment-header">
                 <span class="comment-author">${escapeHtml(msg.username)}</span>
                 <span class="comment-date">${escapeHtml(msg.created_at)}</span>
             </div>
-            <div style="display: flex; align-items: flex-end; gap: 6px;">
-                <p class="comment-content"></p>
-                ${pinBtn}
-                ${deleteBtn}
-            </div>
+            <p class="comment-content"></p>
         `;
         div.querySelector('.comment-content').textContent = msg.content;
         messagesEl.appendChild(div);
@@ -119,20 +131,78 @@
         inputEl.style.height = 'auto';
     });
 
-    messagesEl.addEventListener('click', (e) => {
-        if (e.target.matches('.chat-delete-btn')) {
-            const id = Number(e.target.dataset.id);
-            socket.emit('delete_message', { id });
+    if (announceBtnEl) {
+        announceBtnEl.addEventListener('click', () => {
+            const content = inputEl.value.trim();
+            if (!content) return;
+            socket.emit('set_announcement', { room_id: ROOM_ID, content });
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+        });
+    }
+
+    function hideContextMenu() {
+        contextMenuEl.hidden = true;
+        contextMessageId = null;
+    }
+
+    messagesEl.addEventListener('contextmenu', (e) => {
+        const messageEl = e.target.closest('.chat-message');
+        if (!messageEl) return;
+        e.preventDefault();
+
+        contextMessageId = Number(messageEl.dataset.id);
+        ctxDeleteBtnEl.hidden = !canDelete(messageEl.dataset.username);
+
+        contextMenuEl.hidden = false;
+        contextMenuEl.style.left = e.clientX + 'px';
+        contextMenuEl.style.top = e.clientY + 'px';
+
+        const rect = contextMenuEl.getBoundingClientRect();
+        if (rect.right > window.innerWidth) {
+            contextMenuEl.style.left = Math.max(8, window.innerWidth - rect.width - 8) + 'px';
         }
-        if (e.target.matches('.chat-pin-btn')) {
-            const id = Number(e.target.dataset.id);
-            socket.emit('pin_message', { id });
+        if (rect.bottom > window.innerHeight) {
+            contextMenuEl.style.top = Math.max(8, window.innerHeight - rect.height - 8) + 'px';
         }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!contextMenuEl.hidden && !contextMenuEl.contains(e.target)) {
+            hideContextMenu();
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideContextMenu();
+    });
+
+    window.addEventListener('resize', hideContextMenu);
+    messagesEl.addEventListener('scroll', hideContextMenu);
+
+    ctxPinBtnEl.addEventListener('click', () => {
+        if (contextMessageId != null) {
+            socket.emit('pin_message', { id: contextMessageId });
+        }
+        hideContextMenu();
+    });
+
+    ctxDeleteBtnEl.addEventListener('click', () => {
+        if (contextMessageId != null) {
+            socket.emit('delete_message', { id: contextMessageId });
+        }
+        hideContextMenu();
     });
 
     if (unpinBtnEl) {
         unpinBtnEl.addEventListener('click', () => {
             socket.emit('unpin_message', { room_id: ROOM_ID });
+        });
+    }
+
+    if (clearAnnouncementBtnEl) {
+        clearAnnouncementBtnEl.addEventListener('click', () => {
+            socket.emit('clear_announcement', { room_id: ROOM_ID });
         });
     }
 
@@ -156,7 +226,7 @@
     });
 
     socket.on('message_pinned', (msg) => {
-        pinnedContentEl.textContent = `${msg.username}: ${msg.content}`;
+        pinnedContentEl.innerHTML = `<span class="pinned-author">${escapeHtml(msg.username)}</span><span class="pinned-text">${escapeHtml(msg.content)}</span>`;
         pinnedBarEl.hidden = false;
         pinnedBarEl.classList.remove('pin-enter');
         void pinnedBarEl.offsetWidth;
@@ -165,6 +235,18 @@
 
     socket.on('message_unpinned', () => {
         pinnedBarEl.hidden = true;
+    });
+
+    socket.on('announcement_set', ({ content }) => {
+        announcementTextEl.textContent = content;
+        announcementBarEl.hidden = false;
+        announcementBarEl.classList.remove('pin-enter');
+        void announcementBarEl.offsetWidth;
+        announcementBarEl.classList.add('pin-enter');
+    });
+
+    socket.on('announcement_cleared', () => {
+        announcementBarEl.hidden = true;
     });
 
     messagesEl.scrollTop = messagesEl.scrollHeight;

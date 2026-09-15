@@ -13,6 +13,7 @@
     <div class="error-message">❌ {{ error }}</div>
     {% endif %}
 
+    {% if perms.manage_room %}
     <div class="section-heading">방 정보</div>
     <div class="settings-card">
         <div class="settings-row">
@@ -43,12 +44,84 @@
             </form>
         </div>
     </div>
+    {% endif %}
 
+    {% if perms.manage_roles %}
+    <div class="section-heading">역할</div>
+
+    {% for role in roles %}
+    <div class="role-card">
+        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/update" id="role-update-{{ role.id }}"></form>
+        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/delete" id="role-delete-{{ role.id }}"></form>
+
+        <div class="role-card-header">
+            <input type="color" name="color" form="role-update-{{ role.id }}" value="{{ role.color }}" class="role-color-input">
+            <input type="text" name="name" form="role-update-{{ role.id }}" value="{{ role.name }}" class="role-name-input" required>
+        </div>
+        <div class="role-perm-grid">
+            <label class="role-perm-row">
+                <span>방 설정 변경</span>
+                <span class="toggle-switch toggle-switch-sm">
+                    <input type="checkbox" name="perm_manage_room" form="role-update-{{ role.id }}" {% if role.perm_manage_room %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </span>
+            </label>
+            <label class="role-perm-row">
+                <span>멤버 관리</span>
+                <span class="toggle-switch toggle-switch-sm">
+                    <input type="checkbox" name="perm_manage_members" form="role-update-{{ role.id }}" {% if role.perm_manage_members %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </span>
+            </label>
+            <label class="role-perm-row">
+                <span>메시지 관리</span>
+                <span class="toggle-switch toggle-switch-sm">
+                    <input type="checkbox" name="perm_manage_messages" form="role-update-{{ role.id }}" {% if role.perm_manage_messages %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </span>
+            </label>
+            <label class="role-perm-row">
+                <span>공지 등록</span>
+                <span class="toggle-switch toggle-switch-sm">
+                    <input type="checkbox" name="perm_announce" form="role-update-{{ role.id }}" {% if role.perm_announce %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </span>
+            </label>
+            <label class="role-perm-row">
+                <span>역할 관리</span>
+                <span class="toggle-switch toggle-switch-sm">
+                    <input type="checkbox" name="perm_manage_roles" form="role-update-{{ role.id }}" {% if role.perm_manage_roles %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </span>
+            </label>
+        </div>
+        <div class="role-card-footer">
+            <button type="submit" form="role-delete-{{ role.id }}" class="role-delete-btn">삭제</button>
+            <button type="submit" form="role-update-{{ role.id }}" class="role-save-btn">저장</button>
+        </div>
+    </div>
+    {% else %}
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-row-desc">아직 만들어진 역할이 없어요. 아래에서 새 역할을 만들어 보세요.</div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <form method="POST" action="/chat/{{ room.id }}/roles" class="new-role-form">
+        <input type="color" name="color" value="#6b7280" class="role-color-input">
+        <input type="text" name="name" placeholder="새 역할 이름" required>
+        <button type="submit">역할 만들기</button>
+    </form>
+    {% endif %}
+
+    {% if perms.manage_members %}
     <div class="section-heading">멤버 초대</div>
     <form method="POST" class="search-form">
         <input type="text" name="username" placeholder="초대할 사용자 아이디" required>
         <button type="submit">초대</button>
     </form>
+    {% endif %}
 
     <div class="section-heading">멤버 {{ members|length }}명</div>
     <div class="settings-card">
@@ -60,6 +133,11 @@
                     <div class="member-name">
                         {{ member.username }}
                         {% if member.username == room.created_by %}<span class="role-badge">방장</span>{% endif %}
+                        {% if member.role_name %}
+                        <span class="member-role-badge" style="background: {{ member.role_color }}22; color: {{ member.role_color }};">
+                            <span class="member-role-dot" style="background: {{ member.role_color }};"></span>{{ member.role_name }}
+                        </span>
+                        {% endif %}
                     </div>
                     {% if member.is_timed_out %}
                     <div class="settings-row-desc" style="color: #f59e0b;">⏱️ {{ member.timeout_until }}까지 타임아웃</div>
@@ -68,6 +146,17 @@
             </div>
             {% if member.username != room.created_by %}
             <div class="member-actions">
+                {% if perms.manage_roles and roles %}
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/role" class="btn-form">
+                    <select name="role_id" class="settings-select" style="font-size: 12px; padding: 5px 8px;" onchange="this.form.submit()">
+                        <option value="">역할 없음</option>
+                        {% for role in roles %}
+                        <option value="{{ role.id }}" {% if member.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
+                {% if perms.manage_members %}
                 {% if member.is_timed_out %}
                 <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout" class="btn-form">
                     <button type="submit" class="text-btn">타임아웃 해제</button>
@@ -85,6 +174,7 @@
                 <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove" class="btn-form">
                     <button type="submit" class="text-btn text-btn-danger">내보내기</button>
                 </form>
+                {% endif %}
             </div>
             {% endif %}
         </div>
