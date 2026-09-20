@@ -5,12 +5,18 @@
 {% block nav_left %}
     <a href="/chat">💬 채팅</a>
     <a href="/new">✍️ 글쓰기</a>
-    {% if session.get("is_admin") %}
-        <a href="/notice/new">📢 공지 작성</a>
-    {% endif %}
     <a href="/notices">📌 공지 목록</a>
     <a href="/dashboard">📊 대시보드</a>
     <a href="/assistant">🏫 반장 도우미</a>
+{% endblock %}
+
+{% block nav_admin %}
+    {% if session.get("is_admin") %}
+    <div class="admin-nav-row">
+        <span class="admin-nav-badge">🛡️ 관리자</span>
+        <a href="/notice/new">📢 공지 작성</a>
+    </div>
+    {% endif %}
 {% endblock %}
 
 {% block content %}
