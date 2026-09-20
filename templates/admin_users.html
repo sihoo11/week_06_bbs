@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}회원 관리{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+{% endblock %}
+
+{% block nav_admin %}
+    <div class="admin-nav-row">
+        <span class="admin-nav-badge">🛡️ 관리자</span>
+        <a href="/notice/new">📢 공지 작성</a>
+        <a href="/admin/users">👥 회원 관리</a>
+    </div>
+{% endblock %}
+
+{% block content %}
+    <h1>👥 회원 관리</h1>
+
+    <div class="section-heading">전체 회원 {{ users|length }}명 · 관리자 {{ admin_count }}명</div>
+    <div class="settings-card">
+        {% for u in users %}
+        <div class="member-row">
+            <div class="member-info">
+                <div class="member-avatar">{{ u.username[0]|upper }}</div>
+                <div>
+                    <div class="member-name">
+                        {{ u.username }}
+                        {% if u.is_admin %}<span class="role-badge">관리자</span>{% endif %}
+                        {% if u.id == session.get("user_id") %}<span class="role-badge" style="background: #eef2f6; color: #4e5968;">나</span>{% endif %}
+                    </div>
+                    <div class="settings-row-desc">가입일 {{ u.created_at }} · 글 {{ u.post_count }}개</div>
+                </div>
+            </div>
+            <div class="member-actions">
+                {% if u.id == session.get("user_id") %}
+                    <span class="settings-row-desc">본인 계정</span>
+                {% else %}
+                    {% if u.is_admin and admin_count <= 1 %}
+                        <span class="settings-row-desc">마지막 관리자</span>
+                    {% else %}
+                        <form method="POST" action="/admin/users/{{ u.id }}/toggle-admin" class="btn-form">
+                            <button type="submit" class="text-btn">{{ '관리자 해제' if u.is_admin else '관리자 지정' }}</button>
+                        </form>
+                        {% if not u.is_admin %}
+                        <form method="POST" action="/admin/users/{{ u.id }}/delete" class="btn-form">
+                            <button type="submit" class="text-btn text-btn-danger">삭제</button>
+                        </form>
+                        {% endif %}
+                    {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+{% endblock %}

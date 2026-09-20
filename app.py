@@ -616,6 +616,74 @@ def notices():
     conn.close()
     return render_template("notices.html", notices=notices)
 
+@app.route("/admin/users")
+def admin_users():
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+
+    conn = get_db()
+    users = conn.execute("""
+        SELECT users.*,
+               (SELECT COUNT(*) FROM posts WHERE posts.user_id = users.id) AS post_count
+        FROM users
+        ORDER BY id ASC
+    """).fetchall()
+    admin_count = sum(1 for u in users if u["is_admin"])
+    conn.close()
+    return render_template("admin_users.html", users=users, admin_count=admin_count)
+
+@app.route("/admin/users/<int:user_id>/toggle-admin", methods=["POST"])
+def toggle_user_admin(user_id):
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+    if user_id == session["user_id"]:
+        return "본인의 권한은 변경할 수 없습니다.", 400
+
+    conn = get_db()
+    target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if target is None:
+        conn.close()
+        return "사용자를 찾을 수 없습니다.", 404
+
+    if target["is_admin"]:
+        admin_count = conn.execute("SELECT COUNT(*) AS c FROM users WHERE is_admin = 1").fetchone()["c"]
+        if admin_count <= 1:
+            conn.close()
+            return "마지막 관리자는 권한을 해제할 수 없습니다.", 400
+        conn.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (user_id,))
+    else:
+        conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
+def delete_user(user_id):
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+    if user_id == session["user_id"]:
+        return "본인 계정은 여기서 삭제할 수 없습니다.", 400
+
+    conn = get_db()
+    target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if target is None:
+        conn.close()
+        return "사용자를 찾을 수 없습니다.", 404
+    if target["is_admin"]:
+        conn.close()
+        return "다른 관리자는 삭제할 수 없습니다. 먼저 권한을 해제하세요.", 400
+
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_users"))
+
 @app.route("/dashboard")
 def dashboard():
     sido = request.args.get("sido", "서울")

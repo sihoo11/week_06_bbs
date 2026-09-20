@@ -981,9 +981,11 @@
             transition: background 0.15s ease;
         }
 
-        /* button[type="submit"] 전역 규칙(width:100%)보다 명시도를 높여 폭을 되돌림 */
+        /* button[type="submit"] 전역 규칙(width:100%, 파란 배경)보다 명시도를 높여 텍스트 버튼 스타일을 되돌림 */
         button[type="submit"].text-btn {
             width: auto;
+            background: none;
+            color: #4e5968;
         }
 
         .text-btn:hover {
@@ -992,6 +994,10 @@
         }
 
         .text-btn-danger {
+            color: #f04452;
+        }
+
+        button[type="submit"].text-btn-danger {
             color: #f04452;
         }
 
