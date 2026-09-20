@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}반장 도우미{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+    <a href="/chat">💬 채팅</a>
+{% endblock %}
+
+{% block content %}
+    <h1>🏫 반장 학교생활 도우미</h1>
+
+    <div class="section-heading">🍚 오늘의 급식 (나이스 공공데이터 + AI 브리핑)</div>
+    <div class="settings-card" style="padding: 20px;">
+        <form method="post" class="assistant-form">
+            <input type="text" name="school_name" value="{{ school_name }}" placeholder="학교 이름 (예: 경기고등학교)">
+            <button type="submit" name="action" value="meal">급식 조회</button>
+        </form>
+        {% if errors.meal %}<div class="error-message">❌ {{ errors.meal }}</div>{% endif %}
+        {% if meal %}
+            <div class="assistant-result official">
+                <span class="assistant-result-label">📋 나이스 공식 원문 — {{ meal_school }} · {{ meal.meal_name }} ({{ meal.date }})</span>{{ meal.menu }}{% if meal.calorie %}
+
+칼로리: {{ meal.calorie }}{% endif %}
+            </div>
+            {% if ai_meal %}
+                <div class="assistant-result ai">
+                    <span class="assistant-result-label">🤖 AI 브리핑 (원문을 해석한 참고용 설명 — 틀릴 수 있어요)</span>{{ ai_meal }}
+                </div>
+            {% endif %}
+            {% if errors.ai_meal %}<div class="error-message">❌ {{ errors.ai_meal }}</div>{% endif %}
+        {% endif %}
+    </div>
+
+    <div class="section-heading">📢 공지 요약 (단일 대화)</div>
+    <div class="settings-card" style="padding: 20px;">
+        <form method="post" class="assistant-form-stack">
+            <textarea name="notice_text" placeholder="공지사항을 붙여넣으세요">{{ notice_text }}</textarea>
+            <button type="submit" name="action" value="notice">[일정 / 할 일 / 준비물]로 정리</button>
+        </form>
+        {% if errors.notice %}<div class="error-message">❌ {{ errors.notice }}</div>{% endif %}
+        {% if summary %}
+            <div class="assistant-result ai">
+                <span class="assistant-result-label">🤖 AI 요약</span>{{ summary }}
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="section-heading">📷 사진 분석 (시간표·안내문)</div>
+    <div class="settings-card" style="padding: 20px;">
+        <form method="post" enctype="multipart/form-data" class="assistant-form-stack">
+            <input type="file" name="photo" accept="image/png,image/jpeg">
+            <button type="submit" name="action" value="image">사진에서 일정·준비물 읽기</button>
+        </form>
+        {% if errors.image %}<div class="error-message">❌ {{ errors.image }}</div>{% endif %}
+        {% if image_result %}
+            <div class="assistant-result ai">
+                <span class="assistant-result-label">🤖 AI가 읽은 내용 (사진과 꼭 대조하세요)</span>{{ image_result }}
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="section-heading">💬 반장 챗봇 (연속 대화)</div>
+    <div class="assistant-chat">
+        <div class="chat-container">
+            <div class="chat-messages" id="chat-messages">
+                {% for m in history %}
+                <div class="chat-message{% if m.role == 'user' %} own{% endif %}">
+                    <div class="comment-header">
+                        <span class="comment-author">{{ '나' if m.role == 'user' else '반장' }}</span>
+                    </div>
+                    <p class="comment-content">{{ m.content }}</p>
+                </div>
+                {% else %}
+                <div class="settings-row-desc" id="empty-note" style="padding: 8px 0;">대화를 시작해보세요. 이전 대화를 기억해요.</div>
+                {% endfor %}
+            </div>
+
+            <form id="chat-form">
+                <textarea id="chat-input" placeholder="질문을 입력하세요..." required></textarea>
+                <div class="chat-send-group">
+                    <button type="button" id="reset-btn" class="chat-announce-btn" title="대화 초기화">🔄</button>
+                    <button type="submit" title="전송">✈️</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const messagesEl = document.getElementById('chat-messages');
+    const formEl = document.getElementById('chat-form');
+    const inputEl = document.getElementById('chat-input');
+    const resetBtnEl = document.getElementById('reset-btn');
+
+    function removeEmptyNote() {
+        const note = document.getElementById('empty-note');
+        if (note) note.remove();
+    }
+
+    function appendMessage(role, content) {
+        removeEmptyNote();
+        const div = document.createElement('div');
+        div.className = 'chat-message message-pop-in' + (role === 'user' ? ' own' : '');
+        div.innerHTML = `
+            <div class="comment-header">
+                <span class="comment-author">${role === 'user' ? '나' : '반장'}</span>
+            </div>
+            <p class="comment-content"></p>
+        `;
+        div.querySelector('.comment-content').textContent = content;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function postChat(message) {
+        const formData = new FormData();
+        formData.append('message', message);
+        const res = await fetch('/assistant/chat', { method: 'POST', body: formData });
+        return (await res.json()).reply;
+    }
+
+    inputEl.addEventListener('input', () => {
+        inputEl.style.height = 'auto';
+        inputEl.style.height = Math.min(inputEl.scrollHeight, 100) + 'px';
+    });
+
+    formEl.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const message = inputEl.value.trim();
+        if (!message) return;
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+        appendMessage('user', message);
+        appendMessage('assistant', await postChat(message));
+    });
+
+    resetBtnEl.addEventListener('click', async () => {
+        await postChat('초기화');
+        messagesEl.innerHTML = '<div class="settings-row-desc" id="empty-note" style="padding: 8px 0;">대화가 초기화되었습니다.</div>';
+    });
+
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+</script>
+{% endblock %}
