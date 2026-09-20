@@ -177,6 +177,22 @@ def create_tables():
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment')),
+            target_id INTEGER NOT NULL,
+            reporter_username TEXT NOT NULL,
+            reason TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
+        ON reports(target_type, target_id, reporter_username)
+        WHERE status = 'pending'
+    """)
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
@@ -524,6 +540,52 @@ def delete_comment(comment_id):
     conn.close()
     return redirect(url_for("detail", post_id=comment["post_id"]))
 
+@app.route("/posts/<int:post_id>/report", methods=["POST"])
+def report_post(post_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if post is None:
+        conn.close()
+        return "글 없음", 404
+
+    reason = request.form.get("reason", "").strip()
+    try:
+        conn.execute(
+            "INSERT INTO reports (target_type, target_id, reporter_username, reason) VALUES ('post', ?, ?, ?)",
+            (post_id, session["username"], reason),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    conn.close()
+    return redirect(url_for("detail", post_id=post_id))
+
+@app.route("/comments/<int:comment_id>/report", methods=["POST"])
+def report_comment(comment_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+    if comment is None:
+        conn.close()
+        return "댓글 없음", 404
+
+    reason = request.form.get("reason", "").strip()
+    try:
+        conn.execute(
+            "INSERT INTO reports (target_type, target_id, reporter_username, reason) VALUES ('comment', ?, ?, ?)",
+            (comment_id, session["username"], reason),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    conn.close()
+    return redirect(url_for("detail", post_id=comment["post_id"]))
+
 @app.route("/notice/new", methods=["GET", "POST"])
 def new_notice():
     if "user_id" not in session:
@@ -683,6 +745,86 @@ def delete_user(user_id):
     conn.commit()
     conn.close()
     return redirect(url_for("admin_users"))
+
+@app.route("/admin/reports")
+def admin_reports():
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT reports.*,
+               posts.title AS post_title,
+               comments.content AS comment_content,
+               comments.post_id AS comment_post_id
+        FROM reports
+        LEFT JOIN posts ON reports.target_type = 'post' AND reports.target_id = posts.id
+        LEFT JOIN comments ON reports.target_type = 'comment' AND reports.target_id = comments.id
+        WHERE reports.status = 'pending'
+        ORDER BY reports.id DESC
+    """).fetchall()
+    conn.close()
+
+    reports = []
+    for r in rows:
+        if r["target_type"] == "post":
+            exists = r["post_title"] is not None
+            preview = r["post_title"] if exists else "(삭제된 게시글)"
+            link_post_id = r["target_id"] if exists else None
+        else:
+            exists = r["comment_content"] is not None
+            preview = r["comment_content"] if exists else "(삭제된 댓글)"
+            link_post_id = r["comment_post_id"] if exists else None
+        reports.append({
+            "id": r["id"], "target_type": r["target_type"],
+            "reporter_username": r["reporter_username"], "reason": r["reason"],
+            "created_at": r["created_at"], "preview": preview,
+            "exists": exists, "link_post_id": link_post_id,
+        })
+
+    return render_template("admin_reports.html", reports=reports)
+
+@app.route("/admin/reports/<int:report_id>/dismiss", methods=["POST"])
+def dismiss_report(report_id):
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+
+    conn = get_db()
+    conn.execute("UPDATE reports SET status = 'dismissed' WHERE id = ?", (report_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_reports"))
+
+@app.route("/admin/reports/<int:report_id>/remove-content", methods=["POST"])
+def remove_reported_content(report_id):
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+
+    conn = get_db()
+    report = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    if report is None:
+        conn.close()
+        return "신고 내역을 찾을 수 없습니다.", 404
+
+    if report["target_type"] == "post":
+        conn.execute("DELETE FROM comments WHERE post_id = ?", (report["target_id"],))
+        conn.execute("DELETE FROM posts WHERE id = ?", (report["target_id"],))
+    else:
+        conn.execute("DELETE FROM comments WHERE id = ?", (report["target_id"],))
+
+    conn.execute(
+        "UPDATE reports SET status = 'resolved' WHERE target_type = ? AND target_id = ? AND status = 'pending'",
+        (report["target_type"], report["target_id"]),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_reports"))
 
 @app.route("/dashboard")
 def dashboard():

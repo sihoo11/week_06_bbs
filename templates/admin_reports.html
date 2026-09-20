@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}신고 관리{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+{% endblock %}
+
+{% block nav_admin %}
+    {% if session.get("is_admin") %}
+        {% include "_admin_nav.html" %}
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    <h1>🚨 신고 관리</h1>
+
+    <div class="section-heading">대기 중인 신고 {{ reports|length }}건</div>
+
+    {% if not reports %}
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-row-desc">대기 중인 신고가 없어요.</div>
+        </div>
+    </div>
+    {% else %}
+    <div class="settings-card">
+        {% for r in reports %}
+        <div class="member-row">
+            <div class="member-info">
+                <div class="member-avatar">{{ '📝' if r.target_type == 'post' else '💬' }}</div>
+                <div>
+                    <div class="member-name">
+                        {{ '게시글' if r.target_type == 'post' else '댓글' }} 신고
+                        <span class="role-badge">신고자: {{ r.reporter_username }}</span>
+                    </div>
+                    <div class="settings-row-desc">
+                        {% if r.exists and r.link_post_id %}
+                            <a href="/posts/{{ r.link_post_id }}">{{ r.preview | truncate(60) }}</a>
+                        {% else %}
+                            {{ r.preview | truncate(60) }}
+                        {% endif %}
+                    </div>
+                    {% if r.reason %}<div class="settings-row-desc">사유: {{ r.reason }}</div>{% endif %}
+                    <div class="settings-row-desc">{{ r.created_at }}</div>
+                </div>
+            </div>
+            <div class="member-actions">
+                <form method="POST" action="/admin/reports/{{ r.id }}/dismiss" class="btn-form">
+                    <button type="submit" class="text-btn">기각</button>
+                </form>
+                {% if r.exists %}
+                <form method="POST" action="/admin/reports/{{ r.id }}/remove-content" class="btn-form" onsubmit="return confirm('신고된 콘텐츠를 삭제하시겠습니까?')">
+                    <button type="submit" class="text-btn text-btn-danger">삭제</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+{% endblock %}

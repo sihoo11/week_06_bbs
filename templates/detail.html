@@ -21,17 +21,25 @@
         {{ post.content }}
     </div>
 
-    {% if session.get("user_id") == post.user_id or (user and user.is_admin) %}
+    {% if session.get("user_id") %}
     <div class="post-actions">
-        {% if post.is_notice %}
-            <a href="/notice/{{ post.id }}/edit">✏️ 수정</a>
-            <form method="POST" action="/notice/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
-                <button type="submit" class="delete-btn">🗑️ 삭제</button>
-            </form>
-        {% else %}
-            <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
-            <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
-                <button type="submit" class="delete-btn">🗑️ 삭제</button>
+        {% if session.get("user_id") == post.user_id or (user and user.is_admin) %}
+            {% if post.is_notice %}
+                <a href="/notice/{{ post.id }}/edit">✏️ 수정</a>
+                <form method="POST" action="/notice/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
+                    <button type="submit" class="delete-btn">🗑️ 삭제</button>
+                </form>
+            {% else %}
+                <a href="/posts/{{ post.id }}/edit">✏️ 수정</a>
+                <form method="POST" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('정말 삭제하시겠습니까?')">
+                    <button type="submit" class="delete-btn">🗑️ 삭제</button>
+                </form>
+            {% endif %}
+        {% endif %}
+        {% if session.get("user_id") != post.user_id %}
+            <form method="POST" action="/posts/{{ post.id }}/report" onsubmit="document.getElementById('report-reason-post-{{ post.id }}').value = prompt('신고 사유를 입력하세요 (선택)') || ''; return true;">
+                <input type="hidden" name="reason" id="report-reason-post-{{ post.id }}">
+                <button type="submit" class="text-btn">🚩 신고</button>
             </form>
         {% endif %}
     </div>
@@ -48,10 +56,20 @@
                         <div class="comment-author">{{ comment.username or '익명' }}</div>
                         <div class="comment-date">{{ comment.created_at }}</div>
                     </div>
-                    {% if session.get("user_id") == comment.user_id or (user and user.is_admin) %}
-                    <form method="POST" action="/comments/{{ comment.id }}/delete" class="btn-form">
-                        <button type="submit" class="text-btn text-btn-danger">삭제</button>
-                    </form>
+                    {% if session.get("user_id") %}
+                    <div style="display: flex; gap: 4px;">
+                        {% if session.get("user_id") == comment.user_id or (user and user.is_admin) %}
+                        <form method="POST" action="/comments/{{ comment.id }}/delete" class="btn-form">
+                            <button type="submit" class="text-btn text-btn-danger">삭제</button>
+                        </form>
+                        {% endif %}
+                        {% if session.get("user_id") != comment.user_id %}
+                        <form method="POST" action="/comments/{{ comment.id }}/report" class="btn-form" onsubmit="document.getElementById('report-reason-comment-{{ comment.id }}').value = prompt('신고 사유를 입력하세요 (선택)') || ''; return true;">
+                            <input type="hidden" name="reason" id="report-reason-comment-{{ comment.id }}">
+                            <button type="submit" class="text-btn">🚩</button>
+                        </form>
+                        {% endif %}
+                    </div>
                     {% endif %}
                 </div>
                 <div class="comment-content">
