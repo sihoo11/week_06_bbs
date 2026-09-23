@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}관리자 통계{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+{% endblock %}
+
+{% block nav_admin %}
+    {% if session.get("is_admin") %}
+        {% include "_admin_nav.html" %}
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    <h1>📈 통계</h1>
+
+    <div class="stat-tiles">
+        <div class="stat-tile"><div class="stat-tile-label">전체 회원</div><div class="stat-tile-value">{{ totals.users }}</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">게시글</div><div class="stat-tile-value">{{ totals.posts }}</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">댓글</div><div class="stat-tile-value">{{ totals.comments }}</div></div>
+        <a href="/admin/reports" class="stat-tile{% if totals.pending_reports %} warn{% endif %}" style="text-decoration: none;">
+            <div class="stat-tile-label">🚨 대기 중인 신고</div><div class="stat-tile-value">{{ totals.pending_reports }}</div>
+        </a>
+        <div class="stat-tile"><div class="stat-tile-label">⛔ 정지 중인 회원</div><div class="stat-tile-value">{{ totals.banned }}</div></div>
+    </div>
+
+    <div class="section-heading">최근 14일 활동</div>
+    <div class="settings-card">
+        <div class="daily-chart" role="img" aria-label="최근 14일 일별 가입자, 게시글, 댓글 수">
+            {% for d in daily %}
+            <div class="daily-col">
+                <div class="daily-bar series-users" style="height: {{ (d.users / daily_max * 100)|round(1) }}%" title="{{ d.date }} 가입 {{ d.users }}명"></div>
+                <div class="daily-bar series-posts" style="height: {{ (d.posts / daily_max * 100)|round(1) }}%" title="{{ d.date }} 게시글 {{ d.posts }}개"></div>
+                <div class="daily-bar series-comments" style="height: {{ (d.comments / daily_max * 100)|round(1) }}%" title="{{ d.date }} 댓글 {{ d.comments }}개"></div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="daily-labels">
+            {% for d in daily %}<span>{{ d.date[5:] if loop.first or loop.last or loop.index0 % 3 == 0 else '' }}</span>{% endfor %}
+        </div>
+        <div class="chart-legend">
+            <span><span class="legend-swatch series-users"></span>가입</span>
+            <span><span class="legend-swatch series-posts"></span>게시글</span>
+            <span><span class="legend-swatch series-comments"></span>댓글</span>
+            <span style="margin-left: auto; color: #8b95a1;">막대에 마우스를 올리면 수치가 보여요</span>
+        </div>
+        <details class="form-extra" style="margin: 0 20px 16px;">
+            <summary>표로 보기</summary>
+            <div class="timetable-wrap">
+                <table class="timetable">
+                    <thead><tr><th>날짜</th><th>가입</th><th>게시글</th><th>댓글</th></tr></thead>
+                    <tbody>
+                        {% for d in daily|reverse %}
+                        <tr><td>{{ d.date }}</td><td>{{ d.users }}</td><td>{{ d.posts }}</td><td>{{ d.comments }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    </div>
+
+    <div class="section-heading">최근 7일 가장 활발한 채팅방</div>
+    <div class="settings-card bar-chart">
+        {% for room in top_rooms %}
+        <div class="bar-row" title="{{ room.name }}: 메시지 {{ room.c }}개">
+            <span class="bar-label">{{ room.name }}</span>
+            <div class="bar-track"><div class="bar-fill" style="width: {{ (room.c / room_max * 100)|round(1) }}%"></div></div>
+            <span class="bar-value">{{ room.c }}</span>
+        </div>
+        {% else %}
+        <div class="settings-row-desc">최근 7일간 채팅 메시지가 없어요.</div>
+        {% endfor %}
+    </div>
+
+    <div class="section-heading">인기 게시글</div>
+    <div class="settings-card">
+        {% for p in top_posts %}
+        <div class="settings-row">
+            <a href="/posts/{{ p.id }}" class="settings-row-label" style="text-decoration: none;">{{ p.title }}</a>
+            <span class="post-meta" style="white-space: nowrap;">❤️ {{ p.like_count }} · 👁 {{ p.views }}</span>
+        </div>
+        {% else %}
+        <div class="settings-row"><div class="settings-row-desc">아직 게시글이 없어요.</div></div>
+        {% endfor %}
+    </div>
+{% endblock %}

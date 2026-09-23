@@ -6,7 +6,7 @@ import sqlite3
 import time
 import uuid
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import openai
@@ -1334,6 +1334,54 @@ def ban_user(user_id):
     conn.commit()
     conn.close()
     return redirect(safe_redirect_target(request.form.get("next"), url_for("admin_users")))
+
+@app.route("/admin/stats")
+def admin_stats():
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+
+    conn = get_db()
+    totals = conn.execute("""
+        SELECT (SELECT COUNT(*) FROM users) AS users,
+               (SELECT COUNT(*) FROM posts WHERE is_notice = 0) AS posts,
+               (SELECT COUNT(*) FROM comments) AS comments,
+               (SELECT COUNT(*) FROM reports WHERE status = 'pending') AS pending_reports,
+               (SELECT COUNT(*) FROM users WHERE banned_until > datetime('now', 'localtime')) AS banned
+    """).fetchone()
+
+    # 최근 14일 일별 가입·글·댓글 수 (기록이 없는 날도 0으로 채운다)
+    days = [(date.today() - timedelta(days=i)).isoformat() for i in range(13, -1, -1)]
+    daily = {d: {"date": d, "users": 0, "posts": 0, "comments": 0} for d in days}
+    for table, key, extra in [("users", "users", ""), ("posts", "posts", "AND is_notice = 0"), ("comments", "comments", "")]:
+        for row in conn.execute(f"""
+            SELECT date(created_at) AS d, COUNT(*) AS c FROM {table}
+            WHERE date(created_at) >= ? {extra} GROUP BY d
+        """, (days[0],)):
+            if row["d"] in daily:
+                daily[row["d"]][key] = row["c"]
+
+    top_rooms = conn.execute("""
+        SELECT chat_rooms.name, COUNT(chat_messages.id) AS c
+        FROM chat_messages JOIN chat_rooms ON chat_rooms.id = chat_messages.room_id
+        WHERE chat_rooms.is_dm = 0 AND chat_messages.created_at >= datetime('now', 'localtime', '-7 days')
+        GROUP BY chat_rooms.id ORDER BY c DESC LIMIT 5
+    """).fetchall()
+    top_posts = conn.execute("""
+        SELECT posts.id, posts.title, posts.views,
+               (SELECT COUNT(*) FROM post_likes WHERE post_likes.post_id = posts.id) AS like_count
+        FROM posts WHERE is_notice = 0 ORDER BY like_count DESC, views DESC LIMIT 5
+    """).fetchall()
+    conn.close()
+
+    daily_rows = list(daily.values())
+    daily_max = max([1] + [r[k] for r in daily_rows for k in ("users", "posts", "comments")])
+    room_max = max([1] + [r["c"] for r in top_rooms])
+    return render_template(
+        "admin_stats.html", totals=totals, daily=daily_rows, daily_max=daily_max,
+        top_rooms=top_rooms, room_max=room_max, top_posts=top_posts,
+    )
 
 @app.route("/admin/reports")
 def admin_reports():
