@@ -180,6 +180,21 @@ def is_room_member(conn, room_id, username):
     return member is not None
 
 
+def can_access_room(conn, room, username):
+    """방 멤버이거나, 관리자면 입장 가능. 단 1:1 DM 은 관리자도 당사자만 볼 수 있다."""
+    if is_room_member(conn, room["id"], username):
+        return True
+    return bool(session.get("is_admin")) and not room["is_dm"]
+
+
+def dm_partner(conn, room_id, username):
+    row = conn.execute(
+        "SELECT username FROM chat_room_members WHERE room_id = ? AND username != ?",
+        (room_id, username),
+    ).fetchone()
+    return row["username"] if row else None
+
+
 def is_timed_out(conn, room_id, username):
     row = conn.execute("""
         SELECT 1 FROM chat_room_members
@@ -359,6 +374,9 @@ def create_tables():
         "ALTER TABLE comments ADD COLUMN updated_at TEXT",
         # 회원 확장: 프로필 사진
         "ALTER TABLE users ADD COLUMN avatar TEXT",
+        # 채팅 확장: 1:1 DM, 이미지 메시지
+        "ALTER TABLE chat_rooms ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE chat_messages ADD COLUMN image TEXT",
     ]:
         try:
             conn.execute(statement)
@@ -1342,6 +1360,7 @@ def chat_rooms():
         rooms = conn.execute(f"""
             SELECT chat_rooms.*, {member_flag_sql}
             FROM chat_rooms
+            WHERE is_dm = 0
             ORDER BY chat_rooms.id DESC
         """, (session["username"],)).fetchall()
     else:
@@ -1349,12 +1368,90 @@ def chat_rooms():
             SELECT * FROM (
                 SELECT chat_rooms.*, {member_flag_sql}
                 FROM chat_rooms
+                WHERE is_dm = 0
             )
             WHERE is_member = 1 OR is_public = 1
             ORDER BY id DESC
         """, (session["username"],)).fetchall()
+
+    dms = conn.execute("""
+        SELECT chat_rooms.id,
+               (SELECT username FROM chat_room_members o
+                WHERE o.room_id = chat_rooms.id AND o.username != :me) AS partner,
+               (SELECT content FROM chat_messages WHERE room_id = chat_rooms.id ORDER BY id DESC LIMIT 1) AS last_content,
+               (SELECT image FROM chat_messages WHERE room_id = chat_rooms.id ORDER BY id DESC LIMIT 1) AS last_image,
+               (SELECT created_at FROM chat_messages WHERE room_id = chat_rooms.id ORDER BY id DESC LIMIT 1) AS last_at
+        FROM chat_rooms
+        JOIN chat_room_members m ON m.room_id = chat_rooms.id AND m.username = :me
+        WHERE chat_rooms.is_dm = 1
+        ORDER BY COALESCE(last_at, chat_rooms.created_at) DESC
+    """, {"me": session["username"]}).fetchall()
     conn.close()
-    return render_template("chat_rooms.html", rooms=rooms)
+    return render_template("chat_rooms.html", rooms=rooms, dms=dms)
+
+@app.route("/dm/<username>", methods=["POST"])
+def open_dm(username):
+    if "user_id" not in session:
+        return redirect("/login")
+    if username == session["username"]:
+        return "자기 자신에게는 메시지를 보낼 수 없습니다.", 400
+
+    conn = get_db()
+    target = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if target is None:
+        conn.close()
+        return "사용자를 찾을 수 없습니다.", 404
+
+    existing = conn.execute("""
+        SELECT chat_rooms.id FROM chat_rooms
+        JOIN chat_room_members a ON a.room_id = chat_rooms.id AND a.username = ?
+        JOIN chat_room_members b ON b.room_id = chat_rooms.id AND b.username = ?
+        WHERE chat_rooms.is_dm = 1
+    """, (session["username"], username)).fetchone()
+    if existing is not None:
+        room_id = existing["id"]
+    else:
+        room_id = conn.execute(
+            "INSERT INTO chat_rooms (name, created_by, is_dm) VALUES (?, ?, 1)",
+            (f"{session['username']}, {username}", session["username"]),
+        ).lastrowid
+        conn.executemany(
+            "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
+            [(room_id, session["username"]), (room_id, username)],
+        )
+        conn.commit()
+    conn.close()
+    return redirect(url_for("chat_room", room_id=room_id))
+
+@app.route("/chat/<int:room_id>/image", methods=["POST"])
+def upload_chat_image(room_id):
+    if "user_id" not in session:
+        return jsonify({"error": "로그인이 필요합니다."}), 401
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None:
+        conn.close()
+        return jsonify({"error": "방이 없습니다."}), 404
+
+    error = chat_send_error(conn, room, session["username"])
+    if error is not None:
+        conn.close()
+        return jsonify({"error": error[1]}), 403
+
+    photo = request.files.get("image")
+    if photo is None or not photo.filename:
+        conn.close()
+        return jsonify({"error": "사진 파일을 선택하세요."}), 400
+    try:
+        image = save_uploaded_image(photo, "chat")
+    except ValueError as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 400
+
+    post_chat_message(conn, room, request.form.get("content", "").strip(), image=image)
+    conn.close()
+    return jsonify({"ok": True})
 
 @app.route("/chat/<int:room_id>/join", methods=["POST"])
 def join_room_self(room_id):
@@ -1367,7 +1464,7 @@ def join_room_self(room_id):
         conn.close()
         return "방 없음", 404
 
-    if not room["is_public"] and not session.get("is_admin"):
+    if room["is_dm"] or (not room["is_public"] and not session.get("is_admin")):
         conn.close()
         return "초대된 사용자만 입장할 수 있습니다.", 403
 
@@ -1395,10 +1492,16 @@ def delete_room(room_id):
 
     is_owner = room["created_by"] == session.get("username")
     is_admin = bool(session.get("is_admin"))
-    if not (is_owner or is_admin):
+    if room["is_dm"]:
+        allowed = is_room_member(conn, room_id, session["username"])
+    else:
+        allowed = is_owner or is_admin
+    if not allowed:
         conn.close()
         return "본인 또는 관리자만 삭제 가능합니다.", 403
 
+    for msg in conn.execute("SELECT image FROM chat_messages WHERE room_id = ? AND image IS NOT NULL", (room_id,)):
+        delete_uploaded_file(msg["image"])
     conn.execute("DELETE FROM chat_rooms WHERE id = ?", (room_id,))
     conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (room_id,))
     conn.execute("DELETE FROM chat_room_members WHERE room_id = ?", (room_id,))
@@ -1417,11 +1520,8 @@ def chat_room(room_id):
         conn.close()
         return "방 없음", 404
 
-    is_admin = bool(session.get("is_admin"))
-    member = is_room_member(conn, room_id, session["username"])
-
-    if not is_admin and not member:
-        if not room["is_public"]:
+    if not can_access_room(conn, room, session["username"]):
+        if room["is_dm"] or not room["is_public"]:
             conn.close()
             return "초대된 사용자만 입장할 수 있습니다.", 403
         try:
@@ -1445,14 +1545,15 @@ def chat_room(room_id):
         ).fetchone()
 
     perms = get_effective_permissions(conn, room, session["username"])
+    partner = dm_partner(conn, room_id, session["username"]) if room["is_dm"] else None
     conn.close()
 
     is_owner = room["created_by"] == session.get("username")
     messages = list(reversed(rows))
     return render_template(
-        "chat.html", room=room, messages=messages, pinned=pinned,
-        is_owner=is_owner, can_announce=perms["announce"],
-        can_manage_settings=any(perms.values()),
+        "chat.html", room=room, messages=messages, pinned=pinned, partner=partner,
+        is_owner=is_owner, can_announce=perms["announce"] and not room["is_dm"],
+        can_manage_settings=any(perms.values()) and not room["is_dm"],
         can_manage_messages=perms["manage_messages"],
     )
 
@@ -1468,7 +1569,7 @@ def room_members(room_id):
         return "방 없음", 404
 
     perms = get_effective_permissions(conn, room, session["username"])
-    if not any(perms.values()):
+    if room["is_dm"] or not any(perms.values()):
         conn.close()
         return "방 설정을 관리할 권한이 없습니다.", 403
 
@@ -1876,7 +1977,8 @@ def handle_join(data):
     if room_id is None:
         return
     conn = get_db()
-    allowed = bool(session.get("is_admin")) or is_room_member(conn, room_id, session["username"])
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    allowed = room is not None and can_access_room(conn, room, session["username"])
     conn.close()
     if allowed:
         room_id_str = str(room_id)
@@ -1901,28 +2003,60 @@ def handle_disconnect():
             sids.pop(sid, None)
             broadcast_online_users(room_id_str)
 
-def post_chat_message(conn, room, content):
-    """메시지를 저장하고 방 전체에 보낸 뒤, 멘션된 방 멤버에게 알림을 보낸다."""
+def chat_send_error(conn, room, username):
+    """메시지를 보낼 수 없으면 (이벤트 이름, 안내 문구) 를, 보낼 수 있으면 None 을 반환한다."""
+    if not can_access_room(conn, room, username):
+        return ("send_error", "이 방에 메시지를 보낼 수 없습니다.")
+
+    is_admin = bool(session.get("is_admin"))
+    is_owner = room["created_by"] == username
+    if not is_admin and is_timed_out(conn, room["id"], username):
+        return ("timeout_error", "타임아웃 상태에서는 메시지를 보낼 수 없습니다.")
+
+    if not is_admin and not is_owner and room["slow_mode_seconds"] > 0:
+        still_waiting = conn.execute("""
+            SELECT datetime(created_at, '+' || ? || ' seconds') > datetime('now', 'localtime') AS waiting
+            FROM chat_messages
+            WHERE room_id = ? AND username = ?
+            ORDER BY id DESC LIMIT 1
+        """, (room["slow_mode_seconds"], room["id"], username)).fetchone()
+        if still_waiting and still_waiting["waiting"]:
+            return ("slowmode_error", f"슬로우 모드: {room['slow_mode_seconds']}초마다 한 번만 보낼 수 있습니다.")
+    return None
+
+
+def post_chat_message(conn, room, content, image=None):
+    """메시지를 저장하고 방 전체에 보낸 뒤, @멘션·DM 알림을 보낸다. 소켓/HTTP 양쪽에서 쓴다."""
     username = session["username"]
     cur = conn.execute(
-        "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
-        (username, content, room["id"]),
+        "INSERT INTO chat_messages (username, content, room_id, image) VALUES (?, ?, ?, ?)",
+        (username, content, room["id"], image),
     )
     row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)).fetchone()
 
-    members = {r["username"] for r in conn.execute(
-        "SELECT username FROM chat_room_members WHERE room_id = ?", (room["id"],)
-    )}
-    notify_mentions(
-        conn, content, username, f"{username}님이 '{room['name']}' 채팅방에서 회원님을 언급했어요",
-        url_for("chat_room", room_id=room["id"]), allowed_usernames=members,
-    )
+    link = url_for("chat_room", room_id=room["id"])
+    online = set(room_online_users[str(room["id"])].values())
+    if room["is_dm"]:
+        partner = dm_partner(conn, room["id"], username)
+        target = conn.execute("SELECT id FROM users WHERE username = ?", (partner,)).fetchone()
+        if target is not None and partner not in online:
+            preview = content[:30] if content else "사진"
+            notify(conn, target["id"], f"💬 {username}님의 메시지: {preview}", link)
+    elif content:
+        members = {r["username"] for r in conn.execute(
+            "SELECT username FROM chat_room_members WHERE room_id = ?", (room["id"],)
+        )}
+        notify_mentions(
+            conn, content, username, f"{username}님이 '{room['name']}' 채팅방에서 회원님을 언급했어요",
+            link, allowed_usernames=members,
+        )
     conn.commit()
 
     socketio.emit("new_message", {
         "id": row["id"],
         "username": row["username"],
         "content": row["content"],
+        "image": url_for("static", filename=row["image"]) if row["image"] else None,
         "created_at": row["created_at"],
     }, to=str(room["id"]))
 
@@ -1942,37 +2076,11 @@ def handle_send_message(data):
         conn.close()
         return
 
-    is_admin = bool(session.get("is_admin"))
-    is_owner = room["created_by"] == session.get("username")
-    allowed = is_admin or is_room_member(conn, room_id, session["username"])
-    if not allowed:
+    error = chat_send_error(conn, room, session["username"])
+    if error is not None:
         conn.close()
+        emit(error[0], {"message": error[1]})
         return
-
-    if not is_admin and is_timed_out(conn, room_id, session["username"]):
-        conn.close()
-        emit("timeout_error", {"message": "타임아웃 상태에서는 메시지를 보낼 수 없습니다."})
-        return
-
-    if not is_admin and not is_owner and room["slow_mode_seconds"] > 0:
-        blocked = conn.execute("""
-            SELECT 1 FROM chat_messages
-            WHERE room_id = ? AND username = ?
-            ORDER BY id DESC LIMIT 1
-        """, (room_id, session["username"])).fetchone()
-        if blocked:
-            still_waiting = conn.execute("""
-                SELECT datetime(created_at, '+' || ? || ' seconds') > datetime('now', 'localtime') AS waiting
-                FROM chat_messages
-                WHERE room_id = ? AND username = ?
-                ORDER BY id DESC LIMIT 1
-            """, (room["slow_mode_seconds"], room_id, session["username"])).fetchone()
-            if still_waiting["waiting"]:
-                conn.close()
-                emit("slowmode_error", {
-                    "message": f"슬로우 모드: {room['slow_mode_seconds']}초마다 한 번만 보낼 수 있습니다."
-                })
-                return
 
     post_chat_message(conn, room, content)
     conn.close()
@@ -2000,6 +2108,7 @@ def handle_delete_message(data):
 
     room_id = message["room_id"]
     conn.execute("DELETE FROM chat_messages WHERE id = ?", (message_id,))
+    delete_uploaded_file(message["image"])
     conn.commit()
     conn.close()
     emit("message_deleted", {"id": message_id}, room=str(room_id))
@@ -2017,9 +2126,8 @@ def handle_pin_message(data):
         return
 
     room_id = message["room_id"]
-    is_admin = bool(session.get("is_admin"))
-    allowed = is_admin or is_room_member(conn, room_id, session["username"])
-    if not allowed:
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None or not can_access_room(conn, room, session["username"]):
         conn.close()
         return
 
@@ -2048,9 +2156,7 @@ def handle_unpin_message(data):
         conn.close()
         return
 
-    is_admin = bool(session.get("is_admin"))
-    allowed = is_admin or is_room_member(conn, room_id, session["username"])
-    if not allowed:
+    if not can_access_room(conn, room, session["username"]):
         conn.close()
         return
 

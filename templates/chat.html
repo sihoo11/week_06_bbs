@@ -10,7 +10,11 @@
 {% endblock %}
 
 {% block content %}
+    {% if room.is_dm %}
+    <h1>💌 <a href="/users/{{ partner }}" style="color: inherit; text-decoration: none;">{{ partner or '(나간 사용자)' }}</a>님과의 대화</h1>
+    {% else %}
     <h1>🗨️ {{ room.name }}</h1>
+    {% endif %}
 
     <div class="online-users" id="online-users">
         <span class="online-dot"></span>접속 중: <span id="online-list">-</span>
@@ -40,7 +44,8 @@
                     <span class="comment-author">{{ m.username }}</span>
                     <span class="comment-date">{{ m.created_at }}</span>
                 </div>
-                <p class="comment-content">{{ m.content }}</p>
+                {% if m.content %}<p class="comment-content">{{ m.content }}</p>{% endif %}
+                {% if m.image %}<a href="{{ url_for('static', filename=m.image) }}" target="_blank" rel="noopener"><img src="{{ url_for('static', filename=m.image) }}" alt="사진" class="chat-image" loading="lazy"></a>{% endif %}
             </div>
             {% endfor %}
         </div>
@@ -51,8 +56,10 @@
         </div>
 
         <form id="chat-form">
-            <textarea id="chat-input" placeholder="메시지를 입력하세요... (@아이디 로 멘션)" required></textarea>
+            <textarea id="chat-input" placeholder="{{ '메시지를 입력하세요...' if room.is_dm else '메시지를 입력하세요... (@아이디 로 멘션)' }}"></textarea>
+            <input type="file" id="chat-image-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
             <div class="chat-send-group">
+                <button type="button" id="attach-btn" class="chat-attach-btn" title="사진 보내기">📷</button>
                 {% if can_announce %}
                 <button type="button" id="announce-btn" class="chat-announce-btn" title="공지로 등록">📢</button>
                 {% endif %}
@@ -109,9 +116,26 @@
                 <span class="comment-author">${escapeHtml(msg.username)}</span>
                 <span class="comment-date">${escapeHtml(msg.created_at)}</span>
             </div>
-            <p class="comment-content"></p>
         `;
-        div.querySelector('.comment-content').textContent = msg.content;
+        if (msg.content) {
+            const p = document.createElement('p');
+            p.className = 'comment-content';
+            p.textContent = msg.content;
+            div.appendChild(p);
+        }
+        if (msg.image) {
+            const link = document.createElement('a');
+            link.href = msg.image;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            const img = document.createElement('img');
+            img.src = msg.image;
+            img.alt = '사진';
+            img.className = 'chat-image';
+            img.addEventListener('load', () => { messagesEl.scrollTop = messagesEl.scrollHeight; });
+            link.appendChild(img);
+            div.appendChild(link);
+        }
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
@@ -128,6 +152,32 @@
         socket.emit('send_message', { room_id: ROOM_ID, content });
         inputEl.value = '';
         inputEl.style.height = 'auto';
+    });
+
+    const attachBtnEl = document.getElementById('attach-btn');
+    const imageInputEl = document.getElementById('chat-image-input');
+    attachBtnEl.addEventListener('click', () => imageInputEl.click());
+    imageInputEl.addEventListener('change', async () => {
+        const file = imageInputEl.files[0];
+        imageInputEl.value = '';
+        if (!file) return;
+        const formData = new FormData();
+        formData.append('image', file);
+        attachBtnEl.disabled = true;
+        try {
+            const res = await fetch(`/chat/${ROOM_ID}/image`, {
+                method: 'POST', body: formData, headers: { 'X-CSRFToken': CSRF_TOKEN },
+            });
+            if (!res.ok) {
+                let message = '사진을 보내지 못했어요.';
+                try { message = (await res.json()).error || message; } catch (_) {
+                    if (res.status === 413) message = '사진 용량이 너무 커요 (5MB 이하).';
+                }
+                alert(message);
+            }
+        } finally {
+            attachBtnEl.disabled = false;
+        }
     });
 
     if (announceBtnEl) {
@@ -217,6 +267,10 @@
     });
 
     socket.on('slowmode_error', ({ message }) => {
+        alert(message);
+    });
+
+    socket.on('send_error', ({ message }) => {
         alert(message);
     });
 

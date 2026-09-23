@@ -18,6 +18,21 @@
         <input type="checkbox" name="is_public" form="create-room-form"> 공개방으로 만들기 (초대 없이 누구나 참여 가능)
     </label>
 
+    {% if dms %}
+        <div class="section-heading">💌 1:1 메시지</div>
+        <ul style="margin-bottom: 8px;">
+            {% for dm in dms %}
+            <li class="list-card">
+                <a href="/chat/{{ dm.id }}">👤 {{ dm.partner or '(나간 사용자)' }}</a>
+                <div class="dm-preview">
+                    {% if dm.last_at %}{{ '📷 사진' if dm.last_image and not dm.last_content else dm.last_content }} · {{ dm.last_at }}{% else %}아직 메시지가 없어요{% endif %}
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        <div class="section-heading">🗨️ 채팅방</div>
+    {% endif %}
+
     {% if rooms %}
         <ul>
             {% for room in rooms %}

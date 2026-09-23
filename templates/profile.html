@@ -17,7 +17,11 @@
             <div class="post-meta">가입일 {{ target.created_at }}</div>
         </div>
         <div class="profile-actions">
-            {% if session.get("user_id") == target.id %}
+            {% if session.get("user_id") and session.get("user_id") != target.id %}
+            <form method="POST" action="/dm/{{ target.username }}" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="text-btn">💬 메시지 보내기</button>
+            </form>
+            {% elif session.get("user_id") == target.id %}
             <a href="/account" class="text-btn">⚙️ 프로필 수정</a>
             {% endif %}
         </div>
