@@ -197,6 +197,7 @@ def create_tables():
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
         "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+        "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
         "ALTER TABLE posts ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_messages ADD COLUMN room_id INTEGER",
         "ALTER TABLE chat_room_members ADD COLUMN timeout_until TEXT",

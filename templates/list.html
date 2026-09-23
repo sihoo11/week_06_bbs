@@ -33,13 +33,13 @@
     <h1>게시판</h1>
 
     <form method="GET" action="/" class="search-form">
-        <input type="text" name="search" placeholder="제목으로 검색..." value="{{ search_query }}">
+        <input type="text" name="q" placeholder="제목·내용으로 검색..." value="{{ q }}">
         <button type="submit">검색</button>
     </form>
 
-    {% if search_query %}
+    {% if q %}
     <div class="search-result">
-        "<strong>{{ search_query }}</strong>" 검색 결과 ({{ posts|length }}개)
+        "<strong>{{ q }}</strong>" 검색 결과 ({{ posts | rejectattr('is_notice') | list | length }}개)
         <a href="/">초기화</a>
     </div>
     {% endif %}
