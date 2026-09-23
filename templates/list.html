@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import user_link %}
 
 {% block title %}게시판{% endblock %}
 
@@ -75,7 +76,7 @@
                 {% if post.has_poll %}<span title="투표">📊</span>{% endif %}
             </div>
             <div class="post-row-meta">
-                <span>{{ post.username or '탈퇴한 회원' }}</span>
+                <span>{{ user_link(post.username) }}</span>
                 <span>{{ post.created_at }}</span>
                 <span>👁 {{ post.views }}</span>
                 <span>❤️ {{ post.like_count }}</span>

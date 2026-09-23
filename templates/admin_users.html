@@ -27,7 +27,7 @@
                         {% if u.is_admin %}<span class="role-badge">관리자</span>{% endif %}
                         {% if u.id == session.get("user_id") %}<span class="role-badge" style="background: #eef2f6; color: #4e5968;">나</span>{% endif %}
                     </div>
-                    <div class="settings-row-desc">가입일 {{ u.created_at }} · 글 {{ u.post_count }}개</div>
+                    <div class="settings-row-desc">가입일 {{ u.created_at }} · 글 {{ u.post_count }}개 · <a href="/users/{{ u.username }}">프로필</a></div>
                 </div>
             </div>
             <div class="member-actions">

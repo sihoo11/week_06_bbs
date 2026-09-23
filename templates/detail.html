@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import avatar, user_link %}
 
 {% block title %}{{ post.title }}{% endblock %}
 
@@ -14,9 +15,10 @@
             <span class="cat-badge">{{ post.category }}</span>
         {% endif %}
         <h1>{{ post.title }}</h1>
-        <div class="post-meta">
-            {% if author %}{{ author.username }}{% endif %} · {{ post.created_at }}
-            {% if post.updated_at %}<span class="edited-mark">(수정됨 {{ post.updated_at }})</span>{% endif %}
+        <div class="post-meta author-line">
+            {{ avatar(author.username if author else None, author.avatar if author else None, 'avatar-sm') }}
+            <span>{{ user_link(author.username if author else None) }} · {{ post.created_at }}
+                {% if post.updated_at %}<span class="edited-mark">(수정됨 {{ post.updated_at }})</span>{% endif %}</span>
         </div>
         <div class="post-stats">👁 조회 {{ post.views }}</div>
     </div>
@@ -100,9 +102,12 @@
             {% for comment in comments %}
             <div class="comment" id="comment-{{ comment.id }}">
                 <div class="comment-header">
-                    <div>
-                        <div class="comment-author">{{ comment.username or '익명' }}</div>
-                        <div class="comment-date">{{ comment.created_at }}{% if comment.updated_at %}<span class="edited-mark">(수정됨)</span>{% endif %}</div>
+                    <div class="author-line">
+                        {{ avatar(comment.username, comment.avatar, 'avatar-sm') }}
+                        <div>
+                            <div class="comment-author">{{ user_link(comment.username) }}</div>
+                            <div class="comment-date">{{ comment.created_at }}{% if comment.updated_at %}<span class="edited-mark">(수정됨)</span>{% endif %}</div>
+                        </div>
                     </div>
                     {% if session.get("user_id") %}
                     <div style="display: flex; gap: 4px;">

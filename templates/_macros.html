@@ -1,0 +1,11 @@
+{% macro avatar(username, avatar_path, size='') -%}
+    {%- if avatar_path -%}
+        <img src="{{ url_for('static', filename=avatar_path) }}" alt="" class="avatar {{ size }}">
+    {%- else -%}
+        <span class="avatar {{ size }}">{{ (username or '?')[0]|upper }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro user_link(username) -%}
+    {%- if username -%}<a href="{{ url_for('profile', username=username) }}">{{ username }}</a>{%- else -%}탈퇴한 회원{%- endif -%}
+{%- endmacro %}

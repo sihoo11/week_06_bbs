@@ -317,6 +317,8 @@ def create_tables():
         "ALTER TABLE posts ADD COLUMN updated_at TEXT",
         "ALTER TABLE posts ADD COLUMN image TEXT",
         "ALTER TABLE comments ADD COLUMN updated_at TEXT",
+        # 회원 확장: 프로필 사진
+        "ALTER TABLE users ADD COLUMN avatar TEXT",
     ]:
         try:
             conn.execute(statement)
@@ -508,7 +510,7 @@ def detail(post_id):
     author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
     user = g.user
     comments = conn.execute("""
-        SELECT comments.*, users.username, users.is_admin
+        SELECT comments.*, users.username, users.is_admin, users.avatar
         FROM comments
         LEFT JOIN users ON comments.user_id = users.id
         WHERE comments.post_id = ?
@@ -703,11 +705,16 @@ def vote_poll(poll_id):
     conn.close()
     return redirect(url_for("detail", post_id=poll["post_id"]))
 
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_가-힣]{2,20}$")
+
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        username = request.form['username']
+        username = request.form['username'].strip()
         password = request.form['password']
+        # @멘션과 프로필 주소에 쓰이므로 공백·특수문자를 막는다
+        if not USERNAME_RE.match(username):
+            return render_template('signup.html', error='아이디는 2~20자의 한글, 영문, 숫자, _ 만 쓸 수 있습니다.')
         hashed_pw = generate_password_hash(password)
         try:
             conn = get_db()
@@ -719,7 +726,7 @@ def signup():
             conn.commit()
             conn.close()
             return redirect('/login')
-        except:
+        except sqlite3.IntegrityError:
             return render_template('signup.html', error='이미 존재하는 아이디입니다.')
     return render_template('signup.html')
 
@@ -748,11 +755,61 @@ def logout():
     session.clear()
     return redirect('/')
 
-@app.route('/account')
+@app.route('/account', methods=['GET', 'POST'])
 def account():
     if "user_id" not in session:
         return redirect('/login')
-    return render_template('account.html')
+
+    user = g.user
+    if request.method == 'POST':
+        avatar = user["avatar"]
+        photo = request.files.get("avatar")
+        try:
+            if photo and photo.filename:
+                avatar = save_uploaded_image(photo, "avatars")
+            elif request.form.get("remove_avatar"):
+                avatar = None
+        except ValueError as e:
+            return render_template('account.html', user=user, error=str(e))
+        if avatar != user["avatar"]:
+            delete_uploaded_file(user["avatar"])
+
+        conn = get_db()
+        conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (avatar, user["id"]))
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        conn.close()
+        return render_template('account.html', user=user, success='프로필이 저장되었습니다.')
+
+    return render_template('account.html', user=user)
+
+@app.route('/users/<username>')
+def profile(username):
+    conn = get_db()
+    target = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if target is None:
+        conn.close()
+        return "사용자를 찾을 수 없습니다.", 404
+
+    posts = conn.execute("""
+        SELECT posts.*,
+               (SELECT COUNT(*) FROM post_likes WHERE post_likes.post_id = posts.id) AS like_count,
+               (SELECT COUNT(*) FROM comments WHERE comments.post_id = posts.id) AS comment_count
+        FROM posts WHERE user_id = ? ORDER BY id DESC LIMIT 20
+    """, (target["id"],)).fetchall()
+    comments = conn.execute("""
+        SELECT comments.*, posts.title AS post_title
+        FROM comments JOIN posts ON posts.id = comments.post_id
+        WHERE comments.user_id = ? ORDER BY comments.id DESC LIMIT 20
+    """, (target["id"],)).fetchall()
+    stats = conn.execute("""
+        SELECT (SELECT COUNT(*) FROM posts WHERE user_id = :id) AS posts,
+               (SELECT COUNT(*) FROM comments WHERE user_id = :id) AS comments,
+               (SELECT COUNT(*) FROM post_likes JOIN posts ON posts.id = post_likes.post_id
+                WHERE posts.user_id = :id) AS likes_received
+    """, {"id": target["id"]}).fetchone()
+    conn.close()
+    return render_template("profile.html", target=target, posts=posts, comments=comments, stats=stats)
 
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password():

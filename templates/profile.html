@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "_macros.html" import avatar %}
+
+{% block title %}{{ target.username }}님의 프로필{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+{% endblock %}
+
+{% block content %}
+    <div class="profile-head">
+        {{ avatar(target.username, target.avatar, 'avatar-lg') }}
+        <div>
+            <h1>{{ target.username }}
+                {% if target.is_admin %}<span class="role-badge">관리자</span>{% endif %}
+            </h1>
+            <div class="post-meta">가입일 {{ target.created_at }}</div>
+        </div>
+        <div class="profile-actions">
+            {% if session.get("user_id") == target.id %}
+            <a href="/account" class="text-btn">⚙️ 프로필 수정</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="stat-tiles">
+        <div class="stat-tile"><div class="stat-tile-label">작성한 글</div><div class="stat-tile-value">{{ stats.posts }}</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">작성한 댓글</div><div class="stat-tile-value">{{ stats.comments }}</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">받은 좋아요</div><div class="stat-tile-value">{{ stats.likes_received }}</div></div>
+    </div>
+
+    <div class="section-heading">최근 작성한 글</div>
+    {% if posts %}
+    <ul>
+        {% for post in posts %}
+        <li class="list-card">
+            <div class="post-row-title">
+                {% if post.is_notice %}<span class="cat-badge">공지</span>{% else %}<span class="cat-badge">{{ post.category }}</span>{% endif %}
+                <a href="/posts/{{ post.id }}">{{ post.title }}</a>
+            </div>
+            <div class="post-row-meta">
+                <span>{{ post.created_at }}</span>
+                <span>👁 {{ post.views }}</span>
+                <span>❤️ {{ post.like_count }}</span>
+                <span>💬 {{ post.comment_count }}</span>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+        <div class="empty-state">아직 작성한 글이 없습니다.</div>
+    {% endif %}
+
+    <div class="section-heading">최근 작성한 댓글</div>
+    {% if comments %}
+    <ul>
+        {% for comment in comments %}
+        <li class="list-card">
+            <a href="/posts/{{ comment.post_id }}#comment-{{ comment.id }}">{{ comment.content }}</a>
+            <div class="post-meta">「{{ comment.post_title }}」에 · {{ comment.created_at }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+        <div class="empty-state">아직 작성한 댓글이 없습니다.</div>
+    {% endif %}
+{% endblock %}
