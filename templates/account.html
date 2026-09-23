@@ -31,6 +31,22 @@
             {% endif %}
         </div>
 
+        <div class="section-heading">우리 반 정보 (시간표·학사일정에 사용돼요)</div>
+        <div class="settings-card" style="padding: 20px;">
+            <label class="form-label" for="school_name">학교 이름</label>
+            <input type="text" id="school_name" name="school_name" value="{{ user.school_name or '' }}" placeholder="예: 경기고등학교">
+            <div class="inline-fields">
+                <div>
+                    <label class="form-label" for="grade">학년</label>
+                    <input type="number" id="grade" name="grade" min="1" max="6" value="{{ user.grade or '' }}" placeholder="예: 2">
+                </div>
+                <div>
+                    <label class="form-label" for="class_nm">반</label>
+                    <input type="text" id="class_nm" name="class_nm" value="{{ user.class_nm or '' }}" placeholder="예: 3">
+                </div>
+            </div>
+        </div>
+
         <button type="submit" style="margin-top: 12px;">저장</button>
     </form>
 

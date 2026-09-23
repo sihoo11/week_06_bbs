@@ -2003,6 +2003,25 @@
             font-size: 14px;
         }
 
+        .deadline-strip {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .deadline-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 12px;
+            background: #fff7ed;
+            color: #9a3412;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
         /* ───── 게시글 상세: 좋아요·이미지·투표·댓글 수정 ───── */
         .post-image {
             display: block;
@@ -2243,6 +2262,74 @@
             font-variant-numeric: tabular-nums;
         }
 
+        /* ───── 우리 반: 시간표·학사일정·D-day ───── */
+        .timetable-wrap {
+            overflow-x: auto;
+        }
+
+        .timetable {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            min-width: 480px;
+        }
+
+        .timetable th, .timetable td {
+            padding: 10px 6px;
+            text-align: center;
+            border-bottom: 1px solid #f2f4f6;
+        }
+
+        .timetable th {
+            color: #8b95a1;
+            font-weight: 600;
+        }
+
+        .timetable .today {
+            background: #eff6ff;
+        }
+
+        .timetable th.today {
+            color: #2563eb;
+        }
+
+        .dday {
+            display: inline-block;
+            min-width: 56px;
+            padding: 4px 8px;
+            border-radius: 8px;
+            background: #f2f4f6;
+            color: #4e5968;
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .dday.urgent {
+            background: #fff0f1;
+            color: #f04452;
+        }
+
+        .dday.soon {
+            background: #fff7ed;
+            color: #c2410c;
+        }
+
+        .dday.past {
+            color: #b0b8c1;
+        }
+
+        .row-past {
+            opacity: 0.55;
+        }
+
+        .inline-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0 10px;
+        }
+
         @media (max-width: 600px) {
             body {
                 padding: 0;
@@ -2257,6 +2344,10 @@
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 8px;
+            }
+
+            .inline-fields {
+                grid-template-columns: 1fr;
             }
         }
 

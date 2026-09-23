@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import user_link %}
+{% from "_macros.html" import user_link, dday_class %}
 
 {% block title %}게시판{% endblock %}
 
@@ -7,6 +7,7 @@
     <a href="/chat">💬 채팅</a>
     <a href="/new">✍️ 글쓰기</a>
     <a href="/notices">📌 공지 목록</a>
+    <a href="/school">🗓️ 우리 반</a>
     <a href="/dashboard">📊 대시보드</a>
     <a href="/assistant">🏫 반장 도우미</a>
 {% endblock %}
@@ -34,6 +35,17 @@
             <div class="notice-empty">공지없음</div>
         {% endif %}
     </div>
+
+    {% if upcoming %}
+    <div class="deadline-strip">
+        {% for a in upcoming %}
+        <a href="/school#assignments" class="deadline-chip">
+            <span class="dday {{ dday_class(a.d_day) }}">{{ a.d_day }}</span>
+            {% if a.subject %}[{{ a.subject }}] {% endif %}{{ a.title }}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <h1>게시판</h1>
 

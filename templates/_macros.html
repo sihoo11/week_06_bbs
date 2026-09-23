@@ -9,3 +9,10 @@
 {% macro user_link(username) -%}
     {%- if username -%}<a href="{{ url_for('profile', username=username) }}">{{ username }}</a>{%- else -%}탈퇴한 회원{%- endif -%}
 {%- endmacro %}
+
+{% macro dday_class(d_day) -%}
+    {%- if d_day == 'D-DAY' or d_day == 'D-1' -%}urgent
+    {%- elif d_day.startswith('D+') -%}past
+    {%- elif d_day in ['D-2', 'D-3'] -%}soon
+    {%- endif -%}
+{%- endmacro %}

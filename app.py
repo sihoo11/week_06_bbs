@@ -3,8 +3,10 @@ import math
 import os
 import re
 import sqlite3
+import time
 import uuid
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 import openai
@@ -164,6 +166,13 @@ def build_pagination(page, total_count, per_page, window=2):
         "pages": list(range(start, end + 1)),
         "has_prev": page > 1, "has_next": page < total_pages,
     }
+
+
+def d_day_label(due_date_str):
+    days = (date.fromisoformat(due_date_str) - date.today()).days
+    if days == 0:
+        return "D-DAY"
+    return f"D-{days}" if days > 0 else f"D+{-days}"
 
 
 def safe_redirect_target(link, fallback):
@@ -343,6 +352,17 @@ def create_tables():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            subject TEXT,
+            due_date TEXT NOT NULL,
+            description TEXT,
+            user_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -372,8 +392,11 @@ def create_tables():
         "ALTER TABLE posts ADD COLUMN updated_at TEXT",
         "ALTER TABLE posts ADD COLUMN image TEXT",
         "ALTER TABLE comments ADD COLUMN updated_at TEXT",
-        # 회원 확장: 프로필 사진
+        # 회원 확장: 프로필 사진, 학교 정보
         "ALTER TABLE users ADD COLUMN avatar TEXT",
+        "ALTER TABLE users ADD COLUMN school_name TEXT",
+        "ALTER TABLE users ADD COLUMN grade INTEGER",
+        "ALTER TABLE users ADD COLUMN class_nm TEXT",
         # 채팅 확장: 1:1 DM, 이미지 메시지
         "ALTER TABLE chat_rooms ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_messages ADD COLUMN image TEXT",
@@ -550,11 +573,17 @@ def index():
     latest_notice = conn.execute(
         "SELECT * FROM posts WHERE is_notice = 1 ORDER BY id DESC LIMIT 1"
     ).fetchone()
+    upcoming = conn.execute("""
+        SELECT * FROM assignments
+        WHERE due_date BETWEEN date('now', 'localtime') AND date('now', 'localtime', '+7 days')
+        ORDER BY due_date ASC LIMIT 3
+    """).fetchall()
     conn.close()
 
     return render_template(
         "list.html", posts=posts, q=q, category=category, sort=sort, total=total,
         sort_options=SORT_OPTIONS, pagination=pagination, latest_notice=latest_notice,
+        upcoming=[dict(a, d_day=d_day_label(a["due_date"])) for a in upcoming],
     )
 
 @app.route("/posts/<int:post_id>")
@@ -837,6 +866,10 @@ def account():
 
     user = g.user
     if request.method == 'POST':
+        school_name = request.form.get("school_name", "").strip() or None
+        grade = request.form.get("grade", type=int)
+        class_nm = request.form.get("class_nm", "").strip() or None
+
         avatar = user["avatar"]
         photo = request.files.get("avatar")
         try:
@@ -850,7 +883,10 @@ def account():
             delete_uploaded_file(user["avatar"])
 
         conn = get_db()
-        conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (avatar, user["id"]))
+        conn.execute(
+            "UPDATE users SET school_name = ?, grade = ?, class_nm = ?, avatar = ? WHERE id = ?",
+            (school_name, grade, class_nm, avatar, user["id"]),
+        )
         conn.commit()
         user = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         conn.close()
@@ -1320,6 +1356,100 @@ def remove_reported_content(report_id):
     conn.commit()
     conn.close()
     return redirect(url_for("admin_reports"))
+
+SCHOOL_CACHE_SECONDS = 10 * 60
+school_cache: dict[tuple, tuple[float, object]] = {}
+
+def cached_school_data(key, loader):
+    """나이스 API 응답을 10분간 메모리에 캐시 (페이지를 열 때마다 외부 API를 부르지 않도록)"""
+    hit = school_cache.get(key)
+    if hit and time.time() - hit[0] < SCHOOL_CACHE_SECONDS:
+        return hit[1]
+    value = loader()
+    school_cache[key] = (time.time(), value)
+    return value
+
+@app.route("/school")
+def school():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    user = g.user
+    school_info = timetable = None
+    schedule = []
+    error = None
+    if user["school_name"]:
+        school_info = cached_school_data(("school", user["school_name"]), lambda: neis.get_school(user["school_name"]))
+        if school_info is None:
+            error = "학교를 찾지 못했어요. 계정관리에서 학교 이름을 정확히 입력했는지 확인하세요."
+        else:
+            schedule = cached_school_data(
+                ("schedule", school_info["school_code"], date.today()),
+                lambda: neis.get_school_schedule(school_info),
+            )
+            if user["grade"] and user["class_nm"]:
+                timetable = cached_school_data(
+                    ("timetable", school_info["school_code"], user["grade"], user["class_nm"], date.today()),
+                    lambda: neis.get_week_timetable(school_info, user["grade"], user["class_nm"]),
+                )
+
+    conn = get_db()
+    assignments = conn.execute("""
+        SELECT assignments.*, users.username FROM assignments
+        LEFT JOIN users ON users.id = assignments.user_id
+        WHERE due_date >= date('now', 'localtime', '-7 days')
+        ORDER BY due_date ASC, id ASC
+    """).fetchall()
+    conn.close()
+
+    return render_template(
+        "school.html", school_info=school_info, timetable=timetable, schedule=schedule, error=error,
+        neis_key_missing=not os.environ.get("NEIS_API_KEY"),
+        assignments=[dict(a, d_day=d_day_label(a["due_date"]), is_past=a["due_date"] < date.today().isoformat())
+                     for a in assignments],
+        today=date.today().isoformat(),
+    )
+
+@app.route("/assignments", methods=["POST"])
+def create_assignment():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    title = request.form.get("title", "").strip()
+    subject = request.form.get("subject", "").strip() or None
+    description = request.form.get("description", "").strip() or None
+    due_date = request.form.get("due_date", "")
+    try:
+        date.fromisoformat(due_date)
+    except ValueError:
+        due_date = ""
+    if title and due_date:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO assignments (title, subject, due_date, description, user_id) VALUES (?, ?, ?, ?, ?)",
+            (title, subject, due_date, description, session["user_id"]),
+        )
+        conn.commit()
+        conn.close()
+    return redirect(url_for("school") + "#assignments")
+
+@app.route("/assignments/<int:assignment_id>/delete", methods=["POST"])
+def delete_assignment(assignment_id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    row = conn.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return "과제를 찾을 수 없습니다.", 404
+    if row["user_id"] != session["user_id"] and not session.get("is_admin"):
+        conn.close()
+        return "등록한 사람 또는 관리자만 삭제할 수 있습니다.", 403
+    conn.execute("DELETE FROM assignments WHERE id = ?", (assignment_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("school") + "#assignments")
 
 @app.route("/dashboard")
 def dashboard():

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% from "_macros.html" import user_link, dday_class %}
+
+{% block title %}우리 반{% endblock %}
+
+{% block nav_left %}
+    <a href="/">← 게시판</a>
+    <a href="/assistant">🏫 반장 도우미</a>
+{% endblock %}
+
+{% block content %}
+    <h1>🗓️ 우리 반
+        {% if school_info %}<span class="post-meta" style="font-weight: 400;">{{ school_info.name }}{% if current_user.grade %} {{ current_user.grade }}학년{% endif %}{% if current_user.class_nm %} {{ current_user.class_nm }}반{% endif %}</span>{% endif %}
+    </h1>
+
+    {% if not current_user.school_name %}
+        <div class="search-result">학교 정보를 등록하면 이번 주 시간표와 학사일정을 볼 수 있어요. <a href="/account">계정관리에서 등록하기 →</a></div>
+    {% elif error %}
+        <div class="error-message">❌ {{ error }}</div>
+    {% endif %}
+
+    {% if school_info and neis_key_missing %}
+        <div class="settings-row-desc" style="margin-bottom: 8px;">ℹ️ NEIS_API_KEY 가 없어 나이스가 최대 5건만 돌려줘요. 시간표·학사일정이 일부만 보일 수 있어요. (.env 에 키를 넣으면 전부 표시돼요)</div>
+    {% endif %}
+
+    {% if school_info %}
+    <div class="section-heading">📚 이번 주 시간표</div>
+    <div class="settings-card">
+        {% if not (current_user.grade and current_user.class_nm) %}
+            <div class="settings-row"><div class="settings-row-desc">학년과 반을 등록하면 시간표가 표시돼요. <a href="/account">등록하기</a></div></div>
+        {% elif timetable and timetable.periods %}
+            <div class="timetable-wrap">
+                <table class="timetable">
+                    <thead>
+                        <tr>
+                            <th>교시</th>
+                            {% for day in timetable.days %}
+                            <th class="{{ 'today' if day.is_today }}">{{ day.weekday }}<br><span style="font-weight: 400;">{{ day.date }}</span></th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for period in timetable.periods %}
+                        <tr>
+                            <th>{{ period }}</th>
+                            {% for day in timetable.days %}
+                            <td class="{{ 'today' if day.is_today }}">{{ day.subjects.get(period, '') }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="settings-row"><div class="settings-row-desc">이번 주 시간표가 나이스에 등록되지 않았어요. (방학이거나 학년·반 정보가 다를 수 있어요)</div></div>
+        {% endif %}
+    </div>
+
+    <div class="section-heading">🏫 다가오는 학사일정 (60일)</div>
+    <div class="settings-card">
+        {% for event in schedule %}
+        <div class="settings-row">
+            <div>
+                <div class="settings-row-label">{{ event.name }}</div>
+                <div class="settings-row-desc">{{ event.date }} ({{ event.weekday }})</div>
+            </div>
+            <span class="dday {{ 'urgent' if event.d_day <= 1 else ('soon' if event.d_day <= 3 else '') }}">{{ 'D-DAY' if event.d_day == 0 else 'D-' ~ event.d_day }}</span>
+        </div>
+        {% else %}
+        <div class="settings-row"><div class="settings-row-desc">등록된 학사일정이 없어요.</div></div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="section-heading" id="assignments">📝 과제 · 수행평가 D-day</div>
+    <div class="settings-card">
+        {% for a in assignments %}
+        <div class="settings-row{% if a.is_past %} row-past{% endif %}">
+            <div style="display: flex; align-items: center; gap: 14px; min-width: 0;">
+                <span class="dday {{ dday_class(a.d_day) }}">{{ a.d_day }}</span>
+                <div style="min-width: 0;">
+                    <div class="settings-row-label">{% if a.subject %}<span class="cat-badge">{{ a.subject }}</span>{% endif %}{{ a.title }}</div>
+                    <div class="settings-row-desc">
+                        마감 {{ a.due_date }} · 등록 {{ user_link(a.username) }}
+                        {% if a.description %}<br>{{ a.description }}{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% if a.user_id == session.get("user_id") or session.get("is_admin") %}
+            <form method="POST" action="/assignments/{{ a.id }}/delete" class="btn-form" onsubmit="return confirm('이 과제를 삭제할까요?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="text-btn text-btn-danger">삭제</button>
+            </form>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="settings-row"><div class="settings-row-desc">등록된 과제가 없어요. 아래에서 반 친구들과 공유할 과제를 추가해보세요.</div></div>
+        {% endfor %}
+    </div>
+
+    <div class="section-heading">➕ 과제 추가</div>
+    <div class="settings-card" style="padding: 20px;">
+        <form method="POST" action="/assignments"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="inline-fields">
+                <div>
+                    <label class="form-label" for="a-subject">과목</label>
+                    <input type="text" id="a-subject" name="subject" placeholder="예: 국어">
+                </div>
+                <div>
+                    <label class="form-label" for="a-due">마감일</label>
+                    <input type="date" id="a-due" name="due_date" min="{{ today }}" required>
+                </div>
+            </div>
+            <label class="form-label" for="a-title">제목</label>
+            <input type="text" id="a-title" name="title" placeholder="예: 독서 감상문 제출" required>
+            <label class="form-label" for="a-desc">메모 (선택)</label>
+            <input type="text" id="a-desc" name="description" placeholder="예: A4 2장, 손글씨">
+            <button type="submit">추가</button>
+        </form>
+    </div>
+{% endblock %}
