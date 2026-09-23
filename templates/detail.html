@@ -143,7 +143,7 @@
 
         {% if session.get("user_id") %}
         <form method="POST" action="/posts/{{ post.id }}/comments" class="comment-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea name="content" placeholder="댓글을 입력하세요..." required></textarea>
+            <textarea name="content" placeholder="댓글을 입력하세요... (@아이디 로 친구를 부를 수 있어요)" required></textarea>
             <button type="submit">댓글 작성</button>
         </form>
         {% else %}

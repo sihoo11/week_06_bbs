@@ -56,6 +56,7 @@ UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
 ROOM_PERMISSION_KEYS = ["manage_room", "manage_members", "manage_messages", "announce", "manage_roles"]
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+MENTION_RE = re.compile(r"@([^\s@]+)")
 
 CATEGORIES = ["자유", "질문", "과제", "분실물"]
 SORT_OPTIONS = {
@@ -132,6 +133,28 @@ def delete_post_cascade(conn, post_id):
         delete_uploaded_file(post["image"])
 
 
+def notify(conn, user_id, message, link):
+    """알림을 저장하고, 접속 중이면 개인 소켓 룸으로 즉시 보낸다. 호출한 쪽에서 commit 한다."""
+    if user_id is None:
+        return
+    conn.execute(
+        "INSERT INTO notifications (user_id, message, link) VALUES (?, ?, ?)",
+        (user_id, message, link),
+    )
+    socketio.emit("notification", {"message": message, "link": link}, to=f"user_{user_id}")
+
+
+def notify_mentions(conn, text, sender_username, message, link, allowed_usernames=None):
+    """본문에서 @아이디 를 찾아 해당 사용자에게 알림. allowed_usernames 가 있으면 그 안의 사용자만."""
+    mentioned = {name.rstrip(".,!?)") for name in MENTION_RE.findall(text)} - {sender_username}
+    for name in mentioned:
+        if allowed_usernames is not None and name not in allowed_usernames:
+            continue
+        target = conn.execute("SELECT id FROM users WHERE username = ?", (name,)).fetchone()
+        if target is not None:
+            notify(conn, target["id"], message, link)
+
+
 def build_pagination(page, total_count, per_page, window=2):
     total_pages = max(1, math.ceil(total_count / per_page))
     page = min(max(1, page), total_pages)
@@ -141,6 +164,12 @@ def build_pagination(page, total_count, per_page, window=2):
         "pages": list(range(start, end + 1)),
         "has_prev": page > 1, "has_next": page < total_pages,
     }
+
+
+def safe_redirect_target(link, fallback):
+    """내부 경로(/로 시작)만 허용해 외부 사이트로의 리다이렉트를 막는다."""
+    link = link or ""
+    return link if link.startswith("/") and not link.startswith("//") else fallback
 
 
 def is_room_member(conn, room_id, username):
@@ -298,6 +327,17 @@ def create_tables():
             PRIMARY KEY (poll_id, user_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            link TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)")
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
@@ -432,7 +472,14 @@ def load_current_user():
 
 @app.context_processor
 def inject_globals():
-    return {"current_user": g.get("user"), "CATEGORIES": CATEGORIES}
+    unread = 0
+    if g.get("user") is not None:
+        conn = get_db()
+        unread = conn.execute(
+            "SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0", (g.user["id"],)
+        ).fetchone()["c"]
+        conn.close()
+    return {"unread_notifications": unread, "current_user": g.get("user"), "CATEGORIES": CATEGORIES}
 
 
 def read_poll_form():
@@ -584,6 +631,11 @@ def new():
             conn.executemany(
                 "INSERT INTO poll_options (poll_id, text) VALUES (?, ?)", [(poll_id, o) for o in options]
             )
+        notify_mentions(
+            conn, content, session["username"],
+            f"{session['username']}님이 게시글에서 회원님을 언급했어요: {title}",
+            url_for("detail", post_id=post_id),
+        )
         conn.commit()
         conn.close()
         return redirect(url_for("detail", post_id=post_id))
@@ -676,6 +728,11 @@ def toggle_like(post_id):
     ).rowcount
     if not removed:
         conn.execute("INSERT INTO post_likes (post_id, user_id) VALUES (?, ?)", (post_id, session["user_id"]))
+        if post["user_id"] != session["user_id"]:
+            notify(
+                conn, post["user_id"], f"{session['username']}님이 회원님의 글을 좋아해요: {post['title']}",
+                url_for("detail", post_id=post_id),
+            )
     conn.commit()
     conn.close()
     return redirect(url_for("detail", post_id=post_id))
@@ -811,6 +868,43 @@ def profile(username):
     conn.close()
     return render_template("profile.html", target=target, posts=posts, comments=comments, stats=stats)
 
+@app.route('/notifications')
+def notifications():
+    if "user_id" not in session:
+        return redirect('/login')
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50", (session["user_id"],)
+    ).fetchall()
+    conn.close()
+    return render_template("notifications.html", notifications=rows)
+
+@app.route('/notifications/<int:notification_id>/open')
+def open_notification(notification_id):
+    if "user_id" not in session:
+        return redirect('/login')
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM notifications WHERE id = ? AND user_id = ?", (notification_id, session["user_id"])
+    ).fetchone()
+    if row is None:
+        conn.close()
+        return redirect(url_for("notifications"))
+    conn.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (notification_id,))
+    conn.commit()
+    conn.close()
+    return redirect(safe_redirect_target(row["link"], url_for("notifications")))
+
+@app.route('/notifications/read-all', methods=['POST'])
+def read_all_notifications():
+    if "user_id" not in session:
+        return redirect('/login')
+    conn = get_db()
+    conn.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (session["user_id"],))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("notifications"))
+
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password():
     if "user_id" not in session:
@@ -860,9 +954,13 @@ def create_comment(post_id):
         "INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)",
         (post_id, session["user_id"], content)
     )
+    link = url_for("detail", post_id=post_id) + f"#comment-{cur.lastrowid}"
+    if post["user_id"] != session["user_id"]:
+        notify(conn, post["user_id"], f"{session['username']}님이 회원님의 글에 댓글을 남겼어요: {post['title']}", link)
+    notify_mentions(conn, content, session["username"], f"{session['username']}님이 댓글에서 회원님을 언급했어요", link)
     conn.commit()
     conn.close()
-    return redirect(url_for("detail", post_id=post_id) + f"#comment-{cur.lastrowid}")
+    return redirect(link)
 
 
 @app.route("/comments/<int:comment_id>/edit", methods=["POST"])
@@ -1187,6 +1285,15 @@ def remove_reported_content(report_id):
         delete_post_cascade(conn, report["target_id"])
     else:
         conn.execute("DELETE FROM comments WHERE id = ?", (report["target_id"],))
+
+    # 같은 대상을 신고한 모든 사람에게 처리 결과를 알린다
+    reporters = conn.execute("""
+        SELECT DISTINCT users.id FROM reports JOIN users ON users.username = reports.reporter_username
+        WHERE reports.target_type = ? AND reports.target_id = ? AND reports.status = 'pending'
+    """, (report["target_type"], report["target_id"])).fetchall()
+    target_label = "게시글" if report["target_type"] == "post" else "댓글"
+    for reporter in reporters:
+        notify(conn, reporter["id"], f"신고하신 {target_label}이 관리자에 의해 삭제되었어요. 감사합니다!", url_for("index"))
 
     conn.execute(
         "UPDATE reports SET status = 'resolved' WHERE target_type = ? AND target_id = ? AND status = 'pending'",
@@ -1754,6 +1861,8 @@ def too_large(_):
 def handle_connect():
     if "user_id" not in session:
         return False
+    # 실시간 알림을 받기 위한 개인 룸
+    join_room(f"user_{session['user_id']}")
 
 def broadcast_online_users(room_id_str):
     usernames = sorted(set(room_online_users[room_id_str].values()))
@@ -1791,6 +1900,32 @@ def handle_disconnect():
         if sid in sids:
             sids.pop(sid, None)
             broadcast_online_users(room_id_str)
+
+def post_chat_message(conn, room, content):
+    """메시지를 저장하고 방 전체에 보낸 뒤, 멘션된 방 멤버에게 알림을 보낸다."""
+    username = session["username"]
+    cur = conn.execute(
+        "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
+        (username, content, room["id"]),
+    )
+    row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+    members = {r["username"] for r in conn.execute(
+        "SELECT username FROM chat_room_members WHERE room_id = ?", (room["id"],)
+    )}
+    notify_mentions(
+        conn, content, username, f"{username}님이 '{room['name']}' 채팅방에서 회원님을 언급했어요",
+        url_for("chat_room", room_id=room["id"]), allowed_usernames=members,
+    )
+    conn.commit()
+
+    socketio.emit("new_message", {
+        "id": row["id"],
+        "username": row["username"],
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }, to=str(room["id"]))
+
 
 @socketio.on("send_message")
 def handle_send_message(data):
@@ -1839,20 +1974,8 @@ def handle_send_message(data):
                 })
                 return
 
-    cur = conn.execute(
-        "INSERT INTO chat_messages (username, content, room_id) VALUES (?, ?, ?)",
-        (session["username"], content, room_id),
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)).fetchone()
+    post_chat_message(conn, room, content)
     conn.close()
-
-    emit("new_message", {
-        "id": row["id"],
-        "username": row["username"],
-        "content": row["content"],
-        "created_at": row["created_at"],
-    }, room=str(room_id))
 
 @socketio.on("delete_message")
 def handle_delete_message(data):

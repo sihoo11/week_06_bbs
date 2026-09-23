@@ -1787,12 +1787,89 @@
             height: 420px;
         }
 
+        /* ───── 알림 ───── */
         .nav-right-top a, .nav-right-top button {
             white-space: nowrap;
         }
 
         .nav-right-top a.username {
             color: #191f28;
+        }
+
+        .notif-bell {
+            position: relative;
+        }
+
+        .notif-count {
+            position: absolute;
+            top: 2px;
+            right: 0;
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px !important;
+            border-radius: 8px;
+            background: #f04452;
+            color: #fff !important;
+            font-size: 10px !important;
+            font-weight: 700;
+            line-height: 16px;
+            text-align: center;
+        }
+
+        .notif-count[hidden] {
+            display: none;
+        }
+
+        .toast-stack {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 1000;
+            max-width: min(360px, calc(100vw - 40px));
+        }
+
+        .toast {
+            display: block;
+            padding: 14px 16px;
+            background: #191f28;
+            color: #fff;
+            border-radius: 14px;
+            font-size: 14px;
+            text-decoration: none;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            animation: fadeIn 0.3s ease-out;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        .toast-hide {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+
+        .notif-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .notif-row.unread {
+            box-shadow: inset 3px 0 0 0 #3b82f6;
+        }
+
+        .notif-row.unread a {
+            font-weight: 600;
+        }
+
+        .notif-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3b82f6;
+            flex-shrink: 0;
         }
 
         /* ───── 게시판: 카테고리·정렬·페이지네이션 ───── */
@@ -2192,6 +2269,7 @@
             </div>
             <div class="nav-right-top">
                 {% if session.get("user_id") %}
+                    <a href="/notifications" class="notif-bell" title="알림">🔔<span class="notif-count" id="notif-count" {% if not unread_notifications %}hidden{% endif %}>{{ unread_notifications }}</span></a>
                     <a href="/users/{{ session.get('username') }}" class="username">{{ session.get("username") }}님</a>
                     <a href="/account">⚙️ 계정관리</a>
                     <form method="POST" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -2206,7 +2284,31 @@
         {% block nav_admin %}{% endblock %}
         {% block content %}{% endblock %}
     </div>
+    <div class="toast-stack" id="toast-stack"></div>
     <script>const CSRF_TOKEN = {{ csrf_token() | tojson }};</script>
+    {% if session.get("user_id") %}
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script>
+        // 모든 페이지가 하나의 소켓을 공유한다 (채팅 페이지도 window.appSocket 을 그대로 사용)
+        window.appSocket = io();
+        (function () {
+            const countEl = document.getElementById('notif-count');
+            const stackEl = document.getElementById('toast-stack');
+            window.appSocket.on('notification', ({ message, link }) => {
+                countEl.textContent = Number(countEl.textContent || 0) + 1;
+                countEl.hidden = false;
+
+                const toast = document.createElement('a');
+                toast.className = 'toast';
+                toast.href = link || '/notifications';
+                toast.textContent = message;
+                stackEl.appendChild(toast);
+                setTimeout(() => toast.classList.add('toast-hide'), 4500);
+                setTimeout(() => toast.remove(), 5000);
+            });
+        })();
+    </script>
+    {% endif %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

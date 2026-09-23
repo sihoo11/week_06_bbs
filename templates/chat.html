@@ -51,7 +51,7 @@
         </div>
 
         <form id="chat-form">
-            <textarea id="chat-input" placeholder="메시지를 입력하세요..." required></textarea>
+            <textarea id="chat-input" placeholder="메시지를 입력하세요... (@아이디 로 멘션)" required></textarea>
             <div class="chat-send-group">
                 {% if can_announce %}
                 <button type="button" id="announce-btn" class="chat-announce-btn" title="공지로 등록">📢</button>
@@ -63,9 +63,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 <script>
-    const socket = io();
+    const socket = window.appSocket;
     const ROOM_ID = {{ room.id | tojson }};
     const CURRENT_USERNAME = {{ session.get('username') | tojson }};
     const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
