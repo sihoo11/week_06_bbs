@@ -16,14 +16,18 @@
     {% endif %}
 {% endblock %}
 
+{% macro board_url(q, category, sort, page=1) -%}
+    {{ url_for('index', q=q or None, category=category or None,
+               sort=(sort if sort != 'latest' else None), page=(page if page > 1 else None)) }}
+{%- endmacro %}
+
 {% block content %}
     <div class="notice-section">
-        {% set notices = posts | selectattr('is_notice', 'equalto', 1) | list %}
-        {% if notices | length > 0 %}
+        {% if latest_notice %}
             <div class="notice-item">
                 <span class="notice-icon">📢</span>
-                <a href="/posts/{{ notices[0].id }}" class="notice-title">{{ notices[0].title }}</a>
-                <span class="notice-date">{{ notices[0].created_at }}</span>
+                <a href="/posts/{{ latest_notice.id }}" class="notice-title">{{ latest_notice.title }}</a>
+                <span class="notice-date">{{ latest_notice.created_at }}</span>
             </div>
         {% else %}
             <div class="notice-empty">공지없음</div>
@@ -33,25 +37,84 @@
     <h1>게시판</h1>
 
     <form method="GET" action="/" class="search-form">
+        {% if category %}<input type="hidden" name="category" value="{{ category }}">{% endif %}
+        {% if sort != 'latest' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <input type="text" name="q" placeholder="제목·내용으로 검색..." value="{{ q }}">
         <button type="submit">검색</button>
     </form>
 
     {% if q %}
     <div class="search-result">
-        "<strong>{{ q }}</strong>" 검색 결과 ({{ posts | rejectattr('is_notice') | list | length }}개)
-        <a href="/">초기화</a>
+        "<strong>{{ q }}</strong>" 검색 결과 ({{ total }}개)
+        <a href="{{ board_url('', category, sort) }}">초기화</a>
     </div>
     {% endif %}
 
+    <div class="board-toolbar">
+        <div class="category-tabs">
+            <a href="{{ board_url(q, '', sort) }}" class="{{ 'active' if not category }}">전체</a>
+            {% for c in CATEGORIES %}
+            <a href="{{ board_url(q, c, sort) }}" class="{{ 'active' if category == c }}">{{ c }}</a>
+            {% endfor %}
+        </div>
+        <div class="sort-links">
+            {% for key, option in sort_options.items() %}
+            <a href="{{ board_url(q, category, key) }}" class="{{ 'active' if sort == key }}">{{ option[0] }}</a>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if posts %}
     <ul>
         {% for post in posts %}
-            {% if not post.is_notice %}
-            <li>
+        <li class="list-card">
+            <div class="post-row-title">
+                <span class="cat-badge">{{ post.category }}</span>
                 <a href="/posts/{{ post.id }}">{{ post.title }}</a>
-                <div class="post-meta">{{ post.created_at }}</div>
-            </li>
-            {% endif %}
+                {% if post.image %}<span title="사진 첨부">🖼️</span>{% endif %}
+                {% if post.has_poll %}<span title="투표">📊</span>{% endif %}
+            </div>
+            <div class="post-row-meta">
+                <span>{{ post.username or '탈퇴한 회원' }}</span>
+                <span>{{ post.created_at }}</span>
+                <span>👁 {{ post.views }}</span>
+                <span>❤️ {{ post.like_count }}</span>
+                <span>💬 {{ post.comment_count }}</span>
+            </div>
+        </li>
         {% endfor %}
     </ul>
+    {% else %}
+        <div class="empty-state">{{ '검색 결과가 없습니다.' if q else '아직 글이 없습니다. 첫 글을 남겨보세요!' }}</div>
+    {% endif %}
+
+    {% if pagination.total_pages > 1 %}
+    <nav class="pagination">
+        {% if pagination.has_prev %}
+            <a href="{{ board_url(q, category, sort, pagination.page - 1) }}">‹</a>
+        {% else %}
+            <span class="disabled">‹</span>
+        {% endif %}
+        {% if pagination.pages[0] > 1 %}
+            <a href="{{ board_url(q, category, sort, 1) }}">1</a>
+            {% if pagination.pages[0] > 2 %}<span class="disabled">…</span>{% endif %}
+        {% endif %}
+        {% for p in pagination.pages %}
+            {% if p == pagination.page %}
+                <span class="current">{{ p }}</span>
+            {% else %}
+                <a href="{{ board_url(q, category, sort, p) }}">{{ p }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if pagination.pages[-1] < pagination.total_pages %}
+            {% if pagination.pages[-1] < pagination.total_pages - 1 %}<span class="disabled">…</span>{% endif %}
+            <a href="{{ board_url(q, category, sort, pagination.total_pages) }}">{{ pagination.total_pages }}</a>
+        {% endif %}
+        {% if pagination.has_next %}
+            <a href="{{ board_url(q, category, sort, pagination.page + 1) }}">›</a>
+        {% else %}
+            <span class="disabled">›</span>
+        {% endif %}
+    </nav>
+    {% endif %}
 {% endblock %}

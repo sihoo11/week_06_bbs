@@ -10,15 +10,63 @@
     <div class="post-header">
         {% if post.is_notice %}
             <span class="notice-badge">📢 공지</span>
+        {% else %}
+            <span class="cat-badge">{{ post.category }}</span>
         {% endif %}
         <h1>{{ post.title }}</h1>
         <div class="post-meta">
             {% if author %}{{ author.username }}{% endif %} · {{ post.created_at }}
+            {% if post.updated_at %}<span class="edited-mark">(수정됨 {{ post.updated_at }})</span>{% endif %}
         </div>
+        <div class="post-stats">👁 조회 {{ post.views }}</div>
     </div>
 
     <div class="post-content">
         {{ post.content }}
+    </div>
+
+    {% if post.image %}
+        <a href="{{ url_for('static', filename=post.image) }}" target="_blank" rel="noopener">
+            <img src="{{ url_for('static', filename=post.image) }}" alt="첨부 이미지" class="post-image">
+        </a>
+    {% endif %}
+
+    {% if poll %}
+    <div class="poll-card">
+        <div class="poll-question">📊 {{ poll.question }}</div>
+        {% for option in poll.options %}
+            {% if session.get("user_id") %}
+            <form method="POST" action="/polls/{{ poll.id }}/vote"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="option_id" value="{{ option.id }}">
+                <button type="submit" class="poll-option{% if poll.my_vote == option.id %} mine{% endif %}">
+                    {% if poll.my_vote %}<span class="poll-bar" style="width: {{ option.percent }}%"></span>{% endif %}
+                    <span>{% if poll.my_vote == option.id %}✓ {% endif %}{{ option.text }}</span>
+                    {% if poll.my_vote %}<span>{{ option.votes }}표 · {{ option.percent }}%</span>{% endif %}
+                </button>
+            </form>
+            {% else %}
+            <div class="poll-option">
+                <span class="poll-bar" style="width: {{ option.percent }}%"></span>
+                <span>{{ option.text }}</span>
+                <span>{{ option.votes }}표 · {{ option.percent }}%</span>
+            </div>
+            {% endif %}
+        {% endfor %}
+        <div class="post-meta">
+            총 {{ poll.total }}명 참여
+            {% if session.get("user_id") %}· {{ '다른 항목을 누르면 선택을 바꿀 수 있어요' if poll.my_vote else '투표하면 결과를 볼 수 있어요' }}{% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="like-row">
+        {% if session.get("user_id") %}
+        <form method="POST" action="/posts/{{ post.id }}/like"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="like-btn{% if liked %} liked{% endif %}">{{ '❤️' if liked else '🤍' }} 좋아요 {{ like_count }}</button>
+        </form>
+        {% else %}
+        <span class="like-btn">🤍 좋아요 {{ like_count }}</span>
+        {% endif %}
     </div>
 
     {% if session.get("user_id") %}
@@ -50,11 +98,11 @@
 
         <div class="comments-list">
             {% for comment in comments %}
-            <div class="comment">
+            <div class="comment" id="comment-{{ comment.id }}">
                 <div class="comment-header">
                     <div>
                         <div class="comment-author">{{ comment.username or '익명' }}</div>
-                        <div class="comment-date">{{ comment.created_at }}</div>
+                        <div class="comment-date">{{ comment.created_at }}{% if comment.updated_at %}<span class="edited-mark">(수정됨)</span>{% endif %}</div>
                     </div>
                     {% if session.get("user_id") %}
                     <div style="display: flex; gap: 4px;">
@@ -75,6 +123,15 @@
                 <div class="comment-content">
                     {{ comment.content }}
                 </div>
+                {% if session.get("user_id") == comment.user_id %}
+                <details class="comment-edit">
+                    <summary class="text-btn">✏️ 수정</summary>
+                    <form method="POST" action="/comments/{{ comment.id }}/edit" class="comment-edit-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <textarea name="content" required>{{ comment.content }}</textarea>
+                        <button type="submit">수정 완료</button>
+                    </form>
+                </details>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

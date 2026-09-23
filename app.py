@@ -1,4 +1,5 @@
 import base64
+import math
 import os
 import re
 import sqlite3
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import openai
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from openai import OpenAI
@@ -48,12 +49,30 @@ user_chats: dict[str, list[dict]] = {}
 # room_id(str) -> {sid: username}, 서버 메모리에만 유지되는 접속자 목록
 room_online_users = defaultdict(dict)
 
-DATABASE = Path(__file__).resolve().parent / 'bbs.db'
+BASE_DIR = Path(__file__).resolve().parent
+DATABASE = BASE_DIR / 'bbs.db'
+UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 
 TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
 ROOM_PERMISSION_KEYS = ["manage_room", "manage_members", "manage_messages", "announce", "manage_roles"]
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+CATEGORIES = ["자유", "질문", "과제", "분실물"]
+SORT_OPTIONS = {
+    "latest": ("최신순", "posts.id DESC"),
+    "likes": ("좋아요순", "like_count DESC, posts.id DESC"),
+    "views": ("조회순", "posts.views DESC, posts.id DESC"),
+}
+POSTS_PER_PAGE = 15
+
+# 확장자 → 파일 시그니처(매직 바이트). 확장자만 바꾼 가짜 이미지를 걸러낸다.
+UPLOAD_IMAGE_SIGNATURES = {
+    ".png": [b"\x89PNG"],
+    ".jpg": [b"\xff\xd8\xff"],
+    ".jpeg": [b"\xff\xd8\xff"],
+    ".gif": [b"GIF87a", b"GIF89a"],
+    ".webp": [b"RIFF"],
+}
 
 class AIError(Exception):
     """사용자 화면 표시용 AI 에러 클래스"""
@@ -70,6 +89,58 @@ def get_post_or_404(post_id):
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
     conn.close()
     return post
+
+
+def save_uploaded_image(file_storage, subdir):
+    """이미지 파일을 static/uploads/<subdir>/ 에 저장하고 static 기준 경로를 반환. 이미지가 아니면 ValueError."""
+    ext = os.path.splitext(file_storage.filename or "")[1].lower()
+    signatures = UPLOAD_IMAGE_SIGNATURES.get(ext)
+    if signatures is None:
+        raise ValueError("JPG, PNG, GIF, WEBP 이미지만 올릴 수 있어요.")
+
+    data = file_storage.read()
+    if not any(data.startswith(sig) for sig in signatures) or (ext == ".webp" and data[8:12] != b"WEBP"):
+        raise ValueError("올바른 이미지 파일이 아니에요.")
+
+    target_dir = UPLOAD_DIR / subdir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    (target_dir / filename).write_bytes(data)
+    return f"uploads/{subdir}/{filename}"
+
+
+def delete_uploaded_file(relative_path):
+    if not relative_path:
+        return
+    path = (UPLOAD_DIR.parent / relative_path).resolve()
+    if UPLOAD_DIR.resolve() in path.parents and path.exists():
+        path.unlink()
+
+
+def delete_post_cascade(conn, post_id):
+    """게시글과 딸린 댓글·좋아요·투표·첨부 이미지를 함께 지운다."""
+    post = conn.execute("SELECT image FROM posts WHERE id = ?", (post_id,)).fetchone()
+    poll = conn.execute("SELECT id FROM polls WHERE post_id = ?", (post_id,)).fetchone()
+    if poll is not None:
+        conn.execute("DELETE FROM poll_votes WHERE poll_id = ?", (poll["id"],))
+        conn.execute("DELETE FROM poll_options WHERE poll_id = ?", (poll["id"],))
+        conn.execute("DELETE FROM polls WHERE id = ?", (poll["id"],))
+    conn.execute("DELETE FROM comments WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    if post is not None:
+        delete_uploaded_file(post["image"])
+
+
+def build_pagination(page, total_count, per_page, window=2):
+    total_pages = max(1, math.ceil(total_count / per_page))
+    page = min(max(1, page), total_pages)
+    start, end = max(1, page - window), min(total_pages, page + window)
+    return {
+        "page": page, "total_pages": total_pages,
+        "pages": list(range(start, end + 1)),
+        "has_prev": page > 1, "has_next": page < total_pages,
+    }
 
 
 def is_room_member(conn, room_id, username):
@@ -196,6 +267,37 @@ def create_tables():
         ON reports(target_type, target_id, reporter_username)
         WHERE status = 'pending'
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS post_likes (
+            post_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            PRIMARY KEY (post_id, user_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS polls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL UNIQUE,
+            question TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS poll_options (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            poll_id INTEGER NOT NULL,
+            text TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS poll_votes (
+            poll_id INTEGER NOT NULL,
+            option_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            PRIMARY KEY (poll_id, user_id)
+        )
+    """)
     # 8주차까지 없던 컬럼을 이어쓰는 DB에 추가 (한 번만 실행됨)
     for statement in [
         "ALTER TABLE posts ADD COLUMN user_id INTEGER",
@@ -209,6 +311,12 @@ def create_tables():
         "ALTER TABLE chat_rooms ADD COLUMN pinned_message_id INTEGER",
         "ALTER TABLE chat_rooms ADD COLUMN announcement TEXT",
         "ALTER TABLE chat_room_members ADD COLUMN role_id INTEGER",
+        # 게시판 확장: 조회수, 카테고리, 수정 시각, 첨부 이미지
+        "ALTER TABLE posts ADD COLUMN views INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN category TEXT NOT NULL DEFAULT '자유'",
+        "ALTER TABLE posts ADD COLUMN updated_at TEXT",
+        "ALTER TABLE posts ADD COLUMN image TEXT",
+        "ALTER TABLE comments ADD COLUMN updated_at TEXT",
     ]:
         try:
             conn.execute(statement)
@@ -304,34 +412,83 @@ def analyze_image(file_storage) -> str:
     return ask(message)
 
 
+@app.before_request
+def load_current_user():
+    """매 요청마다 로그인 사용자를 다시 읽어 탈퇴·권한 변경을 즉시 반영한다."""
+    g.user = None
+    if request.endpoint == "static" or "user_id" not in session:
+        return
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    conn.close()
+    if user is None:
+        session.clear()
+        return
+    session["is_admin"] = user["is_admin"]
+    g.user = user
+
+
+@app.context_processor
+def inject_globals():
+    return {"current_user": g.get("user"), "CATEGORIES": CATEGORIES}
+
+
+def read_poll_form():
+    """글쓰기 폼의 투표 입력값을 (질문, [선택지]) 로 반환. 투표를 만들지 않으면 None."""
+    question = request.form.get("poll_question", "").strip()
+    options = [line.strip() for line in request.form.get("poll_options", "").splitlines() if line.strip()]
+    if not question:
+        return None
+    if len(options) < 2:
+        raise ValueError("투표 선택지는 두 개 이상 입력하세요.")
+    return question, options[:10]
+
+
 @app.route('/')
 def index():
     q = request.args.get('q', '').strip()
+    category = request.args.get('category', '')
+    if category not in CATEGORIES:
+        category = ''
+    sort = request.args.get('sort', 'latest')
+    if sort not in SORT_OPTIONS:
+        sort = 'latest'
+    page = request.args.get('page', 1, type=int)
+
+    where = ["posts.is_notice = 0"]
+    params = []
+    if q:
+        where.append("(posts.title LIKE ? OR posts.content LIKE ?)")
+        params += [f"%{q}%", f"%{q}%"]
+    if category:
+        where.append("posts.category = ?")
+        params.append(category)
+    where_sql = " AND ".join(where)
+
     conn = get_db()
+    total = conn.execute(f"SELECT COUNT(*) AS c FROM posts WHERE {where_sql}", params).fetchone()["c"]
+    pagination = build_pagination(page, total, POSTS_PER_PAGE)
+    posts = conn.execute(f"""
+        SELECT posts.*, users.username,
+               (SELECT COUNT(*) FROM post_likes WHERE post_likes.post_id = posts.id) AS like_count,
+               (SELECT COUNT(*) FROM comments WHERE comments.post_id = posts.id) AS comment_count,
+               EXISTS (SELECT 1 FROM polls WHERE polls.post_id = posts.id) AS has_poll
+        FROM posts
+        LEFT JOIN users ON posts.user_id = users.id
+        WHERE {where_sql}
+        ORDER BY {SORT_OPTIONS[sort][1]}
+        LIMIT ? OFFSET ?
+    """, (*params, POSTS_PER_PAGE, (pagination["page"] - 1) * POSTS_PER_PAGE)).fetchall()
 
-    if q :
-        keyword = f"%{q}%"
-        posts = conn.execute("""
-            SELECT posts.*, users.username
-            FROM posts
-            LEFT JOIN users ON posts.user_id = users.id
-            WHERE posts.title LIKE ? OR posts.content LIKE ?
-            ORDER BY posts.is_notice DESC, posts.id DESC
-        """, (keyword, keyword)).fetchall()
-    else:
-        posts = conn.execute("""
-            SELECT posts.*, users.username
-            FROM posts
-            LEFT JOIN users ON posts.user_id = users.id
-            ORDER BY posts.is_notice DESC, posts.id DESC
-        """).fetchall()
-
-    user = None
-    if "user_id" in session:
-        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-
+    latest_notice = conn.execute(
+        "SELECT * FROM posts WHERE is_notice = 1 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     conn.close()
-    return render_template("list.html", posts=posts, q=q, user=user)
+
+    return render_template(
+        "list.html", posts=posts, q=q, category=category, sort=sort, total=total,
+        sort_options=SORT_OPTIONS, pagination=pagination, latest_notice=latest_notice,
+    )
 
 @app.route("/posts/<int:post_id>")
 def detail(post_id):
@@ -340,10 +497,16 @@ def detail(post_id):
         return "글 없음", 404
 
     conn = get_db()
+    # 같은 세션에서 새로고침할 때마다 조회수가 오르지 않도록 본 글을 기억한다.
+    viewed = session.get("viewed_posts", [])
+    if post_id not in viewed:
+        conn.execute("UPDATE posts SET views = views + 1 WHERE id = ?", (post_id,))
+        conn.commit()
+        session["viewed_posts"] = (viewed + [post_id])[-200:]
+        post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+
     author = conn.execute("SELECT * FROM users WHERE id = ?", (post["user_id"],)).fetchone()
-    user = None
-    if "user_id" in session:
-        user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    user = g.user
     comments = conn.execute("""
         SELECT comments.*, users.username, users.is_admin
         FROM comments
@@ -351,9 +514,39 @@ def detail(post_id):
         WHERE comments.post_id = ?
         ORDER BY comments.id ASC
     """, (post_id,)).fetchall()
+
+    like_count = conn.execute("SELECT COUNT(*) AS c FROM post_likes WHERE post_id = ?", (post_id,)).fetchone()["c"]
+    liked = user is not None and conn.execute(
+        "SELECT 1 FROM post_likes WHERE post_id = ? AND user_id = ?", (post_id, user["id"])
+    ).fetchone() is not None
+
+    poll = conn.execute("SELECT * FROM polls WHERE post_id = ?", (post_id,)).fetchone()
+    poll_view = None
+    if poll is not None:
+        options = conn.execute("""
+            SELECT poll_options.*,
+                   (SELECT COUNT(*) FROM poll_votes WHERE poll_votes.option_id = poll_options.id) AS votes
+            FROM poll_options WHERE poll_id = ? ORDER BY id ASC
+        """, (poll["id"],)).fetchall()
+        my_vote = None
+        if user is not None:
+            row = conn.execute(
+                "SELECT option_id FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll["id"], user["id"])
+            ).fetchone()
+            my_vote = row["option_id"] if row else None
+        total_votes = sum(o["votes"] for o in options)
+        poll_view = {
+            "id": poll["id"], "question": poll["question"], "total": total_votes, "my_vote": my_vote,
+            "options": [
+                dict(o, percent=round(o["votes"] * 100 / total_votes) if total_votes else 0) for o in options
+            ],
+        }
     conn.close()
 
-    return render_template("detail.html", post=post, author=author, user=user, comments=comments)
+    return render_template(
+        "detail.html", post=post, author=author, user=user, comments=comments,
+        like_count=like_count, liked=liked, poll=poll_view,
+    )
 
 @app.route("/new", methods=["GET", "POST"])
 def new():
@@ -363,17 +556,36 @@ def new():
     if request.method == "POST":
         title = request.form["title"]
         content = request.form["content"]
+        category = request.form.get("category", "자유")
+        if category not in CATEGORIES:
+            category = "자유"
+
+        try:
+            poll = read_poll_form()
+            photo = request.files.get("image")
+            image = save_uploaded_image(photo, "posts") if photo and photo.filename else None
+        except ValueError as e:
+            return render_template("new.html", error=str(e), form=request.form)
+
         user_id = session["user_id"]
         conn = get_db()
-        conn.execute("""
-         INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)
-         """,
-         (title, content, user_id)
+        cur = conn.execute(
+            "INSERT INTO posts (title, content, user_id, category, image) VALUES (?, ?, ?, ?, ?)",
+            (title, content, user_id, category, image),
         )
+        post_id = cur.lastrowid
+        if poll is not None:
+            question, options = poll
+            poll_id = conn.execute(
+                "INSERT INTO polls (post_id, question) VALUES (?, ?)", (post_id, question)
+            ).lastrowid
+            conn.executemany(
+                "INSERT INTO poll_options (poll_id, text) VALUES (?, ?)", [(poll_id, o) for o in options]
+            )
         conn.commit()
         conn.close()
-        return redirect("/")
-    return render_template("new.html")
+        return redirect(url_for("detail", post_id=post_id))
+    return render_template("new.html", form={})
 
 @app.route("/posts/<int:post_id>/edit", methods=["GET", "POST"])
 def edit(post_id):
@@ -382,11 +594,12 @@ def edit(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
+    if post is None:
+        return "글 없음", 404
 
     is_owner = post["user_id"] == session["user_id"]
-    is_admin = user and user["is_admin"]
+    is_admin = bool(session.get("is_admin"))
 
     if not (is_owner or is_admin):
         return "본인 또는 관리자만 수정 가능합니다.", 403
@@ -394,8 +607,28 @@ def edit(post_id):
     if request.method == "POST":
         title = request.form["title"]
         content = request.form["content"]
+        category = request.form.get("category", post["category"])
+        if category not in CATEGORIES:
+            category = post["category"]
+
+        image = post["image"]
+        photo = request.files.get("image")
+        try:
+            if photo and photo.filename:
+                image = save_uploaded_image(photo, "posts")
+            elif request.form.get("remove_image"):
+                image = None
+        except ValueError as e:
+            return render_template("edit.html", post=post, error=str(e))
+        if image != post["image"]:
+            delete_uploaded_file(post["image"])
+
         conn = get_db()
-        conn.execute("UPDATE posts SET title = ?, content = ? WHERE id = ?", (title, content, post_id))
+        conn.execute("""
+            UPDATE posts SET title = ?, content = ?, category = ?, image = ?,
+                             updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        """, (title, content, category, image, post_id))
         conn.commit()
         conn.close()
         return redirect(url_for('detail', post_id=post_id))
@@ -409,19 +642,66 @@ def delete_post(post_id):
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if post is None:
+        conn.close()
+        return "글 없음", 404
 
     is_owner = post["user_id"] == session["user_id"]
-    is_admin = user and user["is_admin"]
+    is_admin = bool(session.get("is_admin"))
 
     if not (is_owner or is_admin):
         conn.close()
         return "본인 또는 관리자만 삭제 가능합니다.", 403
 
-    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    delete_post_cascade(conn, post_id)
     conn.commit()
     conn.close()
     return redirect(url_for('index'))
+
+@app.route("/posts/<int:post_id>/like", methods=["POST"])
+def toggle_like(post_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if post is None:
+        conn.close()
+        return "글 없음", 404
+
+    removed = conn.execute(
+        "DELETE FROM post_likes WHERE post_id = ? AND user_id = ?", (post_id, session["user_id"])
+    ).rowcount
+    if not removed:
+        conn.execute("INSERT INTO post_likes (post_id, user_id) VALUES (?, ?)", (post_id, session["user_id"]))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("detail", post_id=post_id))
+
+@app.route("/polls/<int:poll_id>/vote", methods=["POST"])
+def vote_poll(poll_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    poll = conn.execute("SELECT * FROM polls WHERE id = ?", (poll_id,)).fetchone()
+    if poll is None:
+        conn.close()
+        return "투표 없음", 404
+
+    option_id = request.form.get("option_id", type=int)
+    option = conn.execute(
+        "SELECT 1 FROM poll_options WHERE id = ? AND poll_id = ?", (option_id, poll_id)
+    ).fetchone()
+    if option is not None:
+        # 다시 투표하면 선택을 바꾼다
+        conn.execute("""
+            INSERT INTO poll_votes (poll_id, option_id, user_id) VALUES (?, ?, ?)
+            ON CONFLICT (poll_id, user_id) DO UPDATE SET option_id = excluded.option_id
+        """, (poll_id, option_id, session["user_id"]))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("detail", post_id=poll["post_id"]))
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
@@ -514,13 +794,43 @@ def create_comment(post_id):
         return redirect(url_for("detail", post_id=post_id))
 
     conn = get_db()
-    conn.execute(
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if post is None:
+        conn.close()
+        return "글 없음", 404
+
+    cur = conn.execute(
         "INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)",
         (post_id, session["user_id"], content)
     )
     conn.commit()
     conn.close()
-    return redirect(url_for("detail", post_id=post_id))
+    return redirect(url_for("detail", post_id=post_id) + f"#comment-{cur.lastrowid}")
+
+
+@app.route("/comments/<int:comment_id>/edit", methods=["POST"])
+def edit_comment(comment_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+    if comment is None:
+        conn.close()
+        return "댓글 없음", 404
+    if comment["user_id"] != session["user_id"]:
+        conn.close()
+        return "본인 댓글만 수정할 수 있습니다.", 403
+
+    content = request.form.get("content", "").strip()
+    if content:
+        conn.execute(
+            "UPDATE comments SET content = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (content, comment_id),
+        )
+        conn.commit()
+    conn.close()
+    return redirect(url_for("detail", post_id=comment["post_id"]) + f"#comment-{comment_id}")
 
 
 @app.route("/comments/<int:comment_id>/delete", methods=["POST"])
@@ -638,7 +948,7 @@ def edit_notice(post_id):
         content = request.form["content"]
         conn = get_db()
         conn.execute(
-            "UPDATE posts SET title = ?, content = ? WHERE id = ?",
+            "UPDATE posts SET title = ?, content = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (title, content, post_id)
         )
         conn.commit()
@@ -664,7 +974,7 @@ def delete_notice(post_id):
         return "관리자만 공지를 삭제할 수 있습니다.", 403
 
     conn = get_db()
-    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    delete_post_cascade(conn, post_id)
     conn.commit()
     conn.close()
     return redirect(url_for('index'))
@@ -817,8 +1127,7 @@ def remove_reported_content(report_id):
         return "신고 내역을 찾을 수 없습니다.", 404
 
     if report["target_type"] == "post":
-        conn.execute("DELETE FROM comments WHERE post_id = ?", (report["target_id"],))
-        conn.execute("DELETE FROM posts WHERE id = ?", (report["target_id"],))
+        delete_post_cascade(conn, report["target_id"])
     else:
         conn.execute("DELETE FROM comments WHERE id = ?", (report["target_id"],))
 

@@ -4,14 +4,32 @@
 
 {% block content %}
     <div class="nav">
-        <a href="/" class="back-btn">← 목록으로</a>
+        <a href="/posts/{{ post.id }}" class="back-btn">← 글로 돌아가기</a>
     </div>
 
     <h1>글 수정</h1>
 
-    <form method="POST" action="/posts/{{ post.id }}/edit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if error %}<div class="error-message">❌ {{ error }}</div>{% endif %}
+
+    <form method="POST" action="/posts/{{ post.id }}/edit" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="form-label" for="category">카테고리</label>
+        <select name="category" id="category" class="form-select">
+            {% for c in CATEGORIES %}
+            <option value="{{ c }}" {% if post.category == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+        </select>
         <input type="text" name="title" placeholder="제목을 입력하세요" value="{{ post.title }}" required>
         <textarea name="content" placeholder="내용을 입력하세요" required>{{ post.content }}</textarea>
+
+        {% if post.image %}
+            <img src="{{ url_for('static', filename=post.image) }}" alt="현재 첨부 이미지" class="post-image" style="max-height: 180px;">
+            <label class="settings-row-desc" style="display: flex; gap: 6px; align-items: center; margin-bottom: 12px;">
+                <input type="checkbox" name="remove_image" value="1"> 첨부 이미지 삭제
+            </label>
+        {% endif %}
+        <label class="form-label" for="image">🖼️ {{ '사진 교체' if post.image else '사진 첨부' }} (선택, 5MB 이하)</label>
+        <input type="file" name="image" id="image" accept="image/png,image/jpeg,image/gif,image/webp">
+
         <button type="submit">저장</button>
     </form>
 {% endblock %}

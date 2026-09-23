@@ -9,9 +9,27 @@
 
     <h1>새 글 작성</h1>
 
-    <form method="POST" action="/new"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="text" name="title" placeholder="제목을 입력하세요" required>
-        <textarea name="content" placeholder="내용을 입력하세요" required></textarea>
+    {% if error %}<div class="error-message">❌ {{ error }}</div>{% endif %}
+
+    <form method="POST" action="/new" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="form-label" for="category">카테고리</label>
+        <select name="category" id="category" class="form-select">
+            {% for c in CATEGORIES %}
+            <option value="{{ c }}" {% if form.get('category') == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="title" placeholder="제목을 입력하세요" value="{{ form.get('title', '') }}" required>
+        <textarea name="content" placeholder="내용을 입력하세요" required>{{ form.get('content', '') }}</textarea>
+
+        <label class="form-label" for="image">🖼️ 사진 첨부 (선택, 5MB 이하)</label>
+        <input type="file" name="image" id="image" accept="image/png,image/jpeg,image/gif,image/webp">
+
+        <details class="form-extra" {% if form.get('poll_question') %}open{% endif %}>
+            <summary>📊 투표 추가하기 (선택)</summary>
+            <input type="text" name="poll_question" placeholder="투표 질문 (예: 반티 색깔은?)" value="{{ form.get('poll_question', '') }}">
+            <textarea name="poll_options" placeholder="선택지를 한 줄에 하나씩 입력하세요 (2~10개)&#10;검정&#10;흰색&#10;남색">{{ form.get('poll_options', '') }}</textarea>
+        </details>
+
         <button type="submit">저장</button>
     </form>
 {% endblock %}

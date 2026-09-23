@@ -1786,6 +1786,310 @@
         .assistant-chat .chat-container {
             height: 420px;
         }
+
+        /* ───── 게시판: 카테고리·정렬·페이지네이션 ───── */
+        .board-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .category-tabs {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .category-tabs a {
+            padding: 7px 14px;
+            border-radius: 20px;
+            background: #f2f4f6;
+            color: #4e5968;
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: background 0.15s ease;
+        }
+
+        .category-tabs a:hover {
+            background: #e5e8eb;
+        }
+
+        .category-tabs a.active {
+            background: #191f28;
+            color: #fff;
+        }
+
+        .sort-links {
+            display: flex;
+            gap: 2px;
+        }
+
+        .sort-links a {
+            padding: 6px 10px;
+            border-radius: 8px;
+            color: #8b95a1;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .sort-links a.active {
+            color: #191f28;
+            font-weight: 600;
+        }
+
+        .cat-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            margin-right: 6px;
+            border-radius: 6px;
+            background: #e8f0fe;
+            color: #2563eb;
+            font-size: 11px;
+            font-weight: 600;
+            vertical-align: middle;
+        }
+
+        .post-row-title {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+
+        ul li .post-row-title a {
+            display: inline;
+            margin-bottom: 0;
+        }
+
+        .post-row-meta {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            color: #8b95a1;
+            font-size: 12px;
+        }
+
+        .post-row-meta a {
+            color: inherit !important;
+            display: inline !important;
+            margin: 0 !important;
+            font-weight: 400 !important;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 24px;
+        }
+
+        .pagination a, .pagination span {
+            min-width: 36px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 14px;
+            color: #4e5968;
+            text-decoration: none;
+        }
+
+        .pagination a:hover {
+            background: #f2f4f6;
+        }
+
+        .pagination .current {
+            background: #3b82f6;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .pagination .disabled {
+            color: #d1d6db;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            padding: 40px;
+            font-size: 14px;
+        }
+
+        /* ───── 게시글 상세: 좋아요·이미지·투표·댓글 수정 ───── */
+        .post-image {
+            display: block;
+            max-width: 100%;
+            max-height: 520px;
+            border-radius: 14px;
+            margin: 8px 0 20px;
+        }
+
+        .like-btn {
+            display: inline-flex !important;
+            align-items: center;
+            gap: 6px;
+            width: auto !important;
+            padding: 10px 18px !important;
+            border-radius: 20px !important;
+            background: #f2f4f6 !important;
+            color: #4e5968 !important;
+            font-size: 14px !important;
+            font-weight: 600;
+        }
+
+        .like-btn.liked {
+            background: #fff0f1 !important;
+            color: #f04452 !important;
+        }
+
+        .like-row {
+            display: flex;
+            justify-content: center;
+            margin: 24px 0 8px;
+        }
+
+        .post-stats {
+            color: #8b95a1;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .poll-card {
+            background: #f9fafb;
+            border-radius: 16px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .poll-question {
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+
+        .poll-option {
+            position: relative;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            padding: 12px 14px !important;
+            margin-bottom: 8px;
+            border-radius: 12px !important;
+            background: #fff !important;
+            color: #191f28 !important;
+            font-size: 14px !important;
+            font-weight: 500 !important;
+            text-align: left;
+            overflow: hidden;
+            box-shadow: 0 0 0 1px #e5e8eb inset;
+        }
+
+        .poll-option.mine {
+            box-shadow: 0 0 0 2px #3b82f6 inset;
+        }
+
+        .poll-bar {
+            position: absolute;
+            inset: 0 auto 0 0;
+            background: #e8f0fe;
+            z-index: 0;
+            transition: width 0.4s ease;
+        }
+
+        .poll-option span {
+            position: relative;
+            z-index: 1;
+        }
+
+        .form-extra {
+            background: #f9fafb;
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+        }
+
+        .form-extra summary {
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #4e5968;
+        }
+
+        .form-extra[open] summary {
+            margin-bottom: 12px;
+        }
+
+        .form-extra textarea {
+            min-height: 90px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #4e5968;
+            margin-bottom: 6px;
+        }
+
+        .form-select, input[type="date"], input[type="number"] {
+            width: 100%;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-family: inherit;
+            color: #191f28;
+            background: #f2f4f6;
+        }
+
+        input[type="file"] {
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+
+        .edited-mark {
+            color: #b0b8c1;
+            font-size: 11px;
+            margin-left: 4px;
+        }
+
+        .comment-edit summary {
+            list-style: none;
+        }
+
+        .comment-edit summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .comment-edit-form {
+            margin-top: 10px;
+        }
+
+        .comment-edit-form textarea {
+            min-height: 70px;
+            margin-bottom: 8px;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 0;
+            }
+
+            .container {
+                padding: 24px 16px;
+                border-radius: 0;
+            }
+
+            .nav-header-top {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+        }
     </style>
 </head>
 <body>
