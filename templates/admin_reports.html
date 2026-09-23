@@ -42,6 +42,7 @@
                         {% endif %}
                     </div>
                     {% if r.reason %}<div class="settings-row-desc">사유: {{ r.reason }}</div>{% endif %}
+                    {% if r.author_username %}<div class="settings-row-desc">작성자: <a href="/users/{{ r.author_username }}">{{ r.author_username }}</a>{% if r.author_banned %} <span class="timeout-badge">정지 중</span>{% endif %}</div>{% endif %}
                     <div class="settings-row-desc">{{ r.created_at }}</div>
                 </div>
             </div>
@@ -52,6 +53,14 @@
                 {% if r.exists %}
                 <form method="POST" action="/admin/reports/{{ r.id }}/remove-content" class="btn-form" onsubmit="return confirm('신고된 콘텐츠를 삭제하시겠습니까?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="text-btn text-btn-danger">삭제</button>
+                </form>
+                {% endif %}
+                {% if r.author_can_ban and not r.author_banned %}
+                <form method="POST" action="/admin/users/{{ r.author_id }}/ban" class="btn-form" onsubmit="return confirm('작성자 {{ r.author_username }}님을 7일간 정지할까요?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="duration" value="7">
+                    <input type="hidden" name="reason" value="신고 누적: {{ r.reason or '부적절한 게시물' }}">
+                    <input type="hidden" name="next" value="/admin/reports">
+                    <button type="submit" class="text-btn text-btn-danger">작성자 7일 정지</button>
                 </form>
                 {% endif %}
             </div>

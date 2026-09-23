@@ -6,7 +6,7 @@ import sqlite3
 import time
 import uuid
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import openai
@@ -56,6 +56,7 @@ DATABASE = BASE_DIR / 'bbs.db'
 UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 
 TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
+BAN_DURATIONS = {"1": "+1 days", "7": "+7 days", "30": "+30 days"}
 ROOM_PERMISSION_KEYS = ["manage_room", "manage_members", "manage_messages", "announce", "manage_roles"]
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 MENTION_RE = re.compile(r"@([^\s@]+)")
@@ -76,6 +77,12 @@ UPLOAD_IMAGE_SIGNATURES = {
     ".gif": [b"GIF87a", b"GIF89a"],
     ".webp": [b"RIFF"],
 }
+
+# 로그인 연속 실패 제한: (ip, username) -> [실패 횟수, 잠금 해제 시각]
+LOGIN_MAX_FAILURES = 5
+LOGIN_LOCK_SECONDS = 5 * 60
+login_failures: dict[tuple[str, str], list] = {}
+
 
 class AIError(Exception):
     """사용자 화면 표시용 AI 에러 클래스"""
@@ -179,6 +186,10 @@ def safe_redirect_target(link, fallback):
     """내부 경로(/로 시작)만 허용해 외부 사이트로의 리다이렉트를 막는다."""
     link = link or ""
     return link if link.startswith("/") and not link.startswith("//") else fallback
+
+
+def is_banned(user):
+    return bool(user["banned_until"]) and user["banned_until"] > datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def is_room_member(conn, room_id, username):
@@ -392,11 +403,13 @@ def create_tables():
         "ALTER TABLE posts ADD COLUMN updated_at TEXT",
         "ALTER TABLE posts ADD COLUMN image TEXT",
         "ALTER TABLE comments ADD COLUMN updated_at TEXT",
-        # 회원 확장: 프로필 사진, 학교 정보
+        # 회원 확장: 프로필 사진, 학교 정보, 기간 정지
         "ALTER TABLE users ADD COLUMN avatar TEXT",
         "ALTER TABLE users ADD COLUMN school_name TEXT",
         "ALTER TABLE users ADD COLUMN grade INTEGER",
         "ALTER TABLE users ADD COLUMN class_nm TEXT",
+        "ALTER TABLE users ADD COLUMN banned_until TEXT",
+        "ALTER TABLE users ADD COLUMN ban_reason TEXT",
         # 채팅 확장: 1:1 DM, 이미지 메시지
         "ALTER TABLE chat_rooms ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE chat_messages ADD COLUMN image TEXT",
@@ -497,14 +510,14 @@ def analyze_image(file_storage) -> str:
 
 @app.before_request
 def load_current_user():
-    """매 요청마다 로그인 사용자를 다시 읽어 탈퇴·권한 변경을 즉시 반영한다."""
+    """매 요청마다 로그인 사용자를 다시 읽어 정지·탈퇴·권한 변경을 즉시 반영한다."""
     g.user = None
     if request.endpoint == "static" or "user_id" not in session:
         return
     conn = get_db()
     user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     conn.close()
-    if user is None:
+    if user is None or is_banned(user):
         session.clear()
         return
     session["is_admin"] = user["is_admin"]
@@ -839,6 +852,13 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+
+        key = (request.remote_addr or "", username)
+        failure = login_failures.get(key)
+        if failure and failure[1] > time.time():
+            wait_minutes = math.ceil((failure[1] - time.time()) / 60)
+            return render_template('login.html', error=f'로그인 시도가 너무 많습니다. {wait_minutes}분 뒤에 다시 시도하세요.')
+
         conn = get_db()
         user = conn.execute('''
          SELECT * FROM users WHERE username = ?
@@ -847,11 +867,21 @@ def login():
         ).fetchone()
         conn.close()
         if user and check_password_hash(user['password_hash'], password):
+            login_failures.pop(key, None)
+            if is_banned(user):
+                reason = f" (사유: {user['ban_reason']})" if user['ban_reason'] else ""
+                return render_template('login.html', error=f"{user['banned_until'][:16]}까지 이용이 정지된 계정입니다.{reason}")
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['is_admin'] = user['is_admin']
             return redirect('/')
-        return render_template('login.html', error='아이디 또는 비밀번호가 틀렸습니다.')
+
+        count = (failure[0] if failure else 0) + 1
+        if count >= LOGIN_MAX_FAILURES:
+            login_failures[key] = [0, time.time() + LOGIN_LOCK_SECONDS]
+            return render_template('login.html', error=f'비밀번호를 {LOGIN_MAX_FAILURES}번 틀려 5분 동안 로그인이 제한됩니다.')
+        login_failures[key] = [count, 0]
+        return render_template('login.html', error=f'아이디 또는 비밀번호가 틀렸습니다. ({count}/{LOGIN_MAX_FAILURES})')
     return render_template('login.html')
 
 @app.route('/logout', methods=['POST'])
@@ -1217,7 +1247,8 @@ def admin_users():
     """).fetchall()
     admin_count = sum(1 for u in users if u["is_admin"])
     conn.close()
-    return render_template("admin_users.html", users=users, admin_count=admin_count)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return render_template("admin_users.html", users=users, admin_count=admin_count, now=now)
 
 @app.route("/admin/users/<int:user_id>/toggle-admin", methods=["POST"])
 def toggle_user_admin(user_id):
@@ -1269,6 +1300,41 @@ def delete_user(user_id):
     conn.close()
     return redirect(url_for("admin_users"))
 
+@app.route("/admin/users/<int:user_id>/ban", methods=["POST"])
+def ban_user(user_id):
+    if "user_id" not in session:
+        return redirect("/login")
+    if not session.get("is_admin"):
+        return "관리자만 접근할 수 있습니다.", 403
+    if user_id == session["user_id"]:
+        return "본인 계정은 정지할 수 없습니다.", 400
+
+    conn = get_db()
+    target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if target is None:
+        conn.close()
+        return "사용자를 찾을 수 없습니다.", 404
+    if target["is_admin"]:
+        conn.close()
+        return "관리자는 정지할 수 없습니다. 먼저 권한을 해제하세요.", 400
+
+    duration = request.form.get("duration")
+    reason = request.form.get("reason", "").strip() or None
+    if duration == "lift":
+        conn.execute("UPDATE users SET banned_until = NULL, ban_reason = NULL WHERE id = ?", (user_id,))
+    else:
+        modifier = BAN_DURATIONS.get(duration)
+        if modifier is None:
+            conn.close()
+            return "잘못된 기간입니다.", 400
+        conn.execute(
+            f"UPDATE users SET banned_until = datetime('now', 'localtime', '{modifier}'), ban_reason = ? WHERE id = ?",
+            (reason, user_id),
+        )
+    conn.commit()
+    conn.close()
+    return redirect(safe_redirect_target(request.form.get("next"), url_for("admin_users")))
+
 @app.route("/admin/reports")
 def admin_reports():
     if "user_id" not in session:
@@ -1281,15 +1347,19 @@ def admin_reports():
         SELECT reports.*,
                posts.title AS post_title,
                comments.content AS comment_content,
-               comments.post_id AS comment_post_id
+               comments.post_id AS comment_post_id,
+               author.id AS author_id, author.username AS author_username,
+               author.is_admin AS author_is_admin, author.banned_until AS author_banned_until
         FROM reports
         LEFT JOIN posts ON reports.target_type = 'post' AND reports.target_id = posts.id
         LEFT JOIN comments ON reports.target_type = 'comment' AND reports.target_id = comments.id
+        LEFT JOIN users AS author ON author.id = COALESCE(posts.user_id, comments.user_id)
         WHERE reports.status = 'pending'
         ORDER BY reports.id DESC
     """).fetchall()
     conn.close()
 
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     reports = []
     for r in rows:
         if r["target_type"] == "post":
@@ -1305,6 +1375,10 @@ def admin_reports():
             "reporter_username": r["reporter_username"], "reason": r["reason"],
             "created_at": r["created_at"], "preview": preview,
             "exists": exists, "link_post_id": link_post_id,
+            "author_id": r["author_id"], "author_username": r["author_username"],
+            "author_can_ban": r["author_id"] is not None and not r["author_is_admin"]
+                              and r["author_id"] != session["user_id"],
+            "author_banned": bool(r["author_banned_until"]) and r["author_banned_until"] > now,
         })
 
     return render_template("admin_reports.html", reports=reports)
@@ -2137,6 +2211,10 @@ def chat_send_error(conn, room, username):
     """메시지를 보낼 수 없으면 (이벤트 이름, 안내 문구) 를, 보낼 수 있으면 None 을 반환한다."""
     if not can_access_room(conn, room, username):
         return ("send_error", "이 방에 메시지를 보낼 수 없습니다.")
+
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if user is None or is_banned(user):
+        return ("send_error", "이용이 정지된 계정입니다.")
 
     is_admin = bool(session.get("is_admin"))
     is_owner = room["created_by"] == username

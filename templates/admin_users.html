@@ -26,8 +26,10 @@
                         {{ u.username }}
                         {% if u.is_admin %}<span class="role-badge">관리자</span>{% endif %}
                         {% if u.id == session.get("user_id") %}<span class="role-badge" style="background: #eef2f6; color: #4e5968;">나</span>{% endif %}
+                        {% if u.banned_until and u.banned_until > now %}<span class="timeout-badge">⛔ {{ u.banned_until[:16] }}까지 정지</span>{% endif %}
                     </div>
                     <div class="settings-row-desc">가입일 {{ u.created_at }} · 글 {{ u.post_count }}개 · <a href="/users/{{ u.username }}">프로필</a></div>
+                    {% if u.banned_until and u.banned_until > now and u.ban_reason %}<div class="settings-row-desc">정지 사유: {{ u.ban_reason }}</div>{% endif %}
                 </div>
             </div>
             <div class="member-actions">
@@ -41,6 +43,22 @@
                             <button type="submit" class="text-btn">{{ '관리자 해제' if u.is_admin else '관리자 지정' }}</button>
                         </form>
                         {% if not u.is_admin %}
+                            {% if u.banned_until and u.banned_until > now %}
+                            <form method="POST" action="/admin/users/{{ u.id }}/ban" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="duration" value="lift">
+                                <button type="submit" class="text-btn">정지 해제</button>
+                            </form>
+                            {% else %}
+                            <form method="POST" action="/admin/users/{{ u.id }}/ban" class="btn-form" onsubmit="this.reason.value = prompt('정지 사유를 입력하세요 (선택)') || ''; return true;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="reason">
+                                <select name="duration" class="settings-select">
+                                    <option value="1">1일</option>
+                                    <option value="7">7일</option>
+                                    <option value="30">30일</option>
+                                </select>
+                                <button type="submit" class="text-btn text-btn-danger">정지</button>
+                            </form>
+                            {% endif %}
                         <form method="POST" action="/admin/users/{{ u.id }}/delete" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-btn text-btn-danger">삭제</button>
                         </form>
