@@ -12,7 +12,7 @@
 
     <div class="section-heading">🍚 오늘의 급식 (나이스 공공데이터 + AI 브리핑)</div>
     <div class="settings-card" style="padding: 20px;">
-        <form method="post" class="assistant-form">
+        <form method="post" class="assistant-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="text" name="school_name" value="{{ school_name }}" placeholder="학교 이름 (예: 경기고등학교)">
             <button type="submit" name="action" value="meal">급식 조회</button>
         </form>
@@ -34,7 +34,7 @@
 
     <div class="section-heading">📢 공지 요약 (단일 대화)</div>
     <div class="settings-card" style="padding: 20px;">
-        <form method="post" class="assistant-form-stack">
+        <form method="post" class="assistant-form-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <textarea name="notice_text" placeholder="공지사항을 붙여넣으세요">{{ notice_text }}</textarea>
             <button type="submit" name="action" value="notice">[일정 / 할 일 / 준비물]로 정리</button>
         </form>
@@ -48,7 +48,7 @@
 
     <div class="section-heading">📷 사진 분석 (시간표·안내문)</div>
     <div class="settings-card" style="padding: 20px;">
-        <form method="post" enctype="multipart/form-data" class="assistant-form-stack">
+        <form method="post" enctype="multipart/form-data" class="assistant-form-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="photo" accept="image/png,image/jpeg">
             <button type="submit" name="action" value="image">사진에서 일정·준비물 읽기</button>
         </form>
@@ -117,7 +117,7 @@
     async function postChat(message) {
         const formData = new FormData();
         formData.append('message', message);
-        const res = await fetch('/assistant/chat', { method: 'POST', body: formData });
+        const res = await fetch('/assistant/chat', { method: 'POST', body: formData, headers: { 'X-CSRFToken': CSRF_TOKEN } });
         return (await res.json()).reply;
     }
 

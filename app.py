@@ -10,6 +10,7 @@ import openai
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_wtf.csrf import CSRFError, CSRFProtect
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -21,6 +22,8 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+app.config["WTF_CSRF_TIME_LIMIT"] = None
+csrf = CSRFProtect(app)
 socketio = SocketIO(app, async_mode="threading")
 
 client = OpenAI()
@@ -1372,6 +1375,10 @@ def assistant_chat():
         return jsonify({"reply": chat_with_history(user_key, message)})
     except AIError as e:
         return jsonify({"reply": str(e)}), 502
+
+@app.errorhandler(CSRFError)
+def csrf_error(_):
+    return "보안 토큰이 만료되었거나 올바르지 않아요. 페이지를 새로고침한 뒤 다시 시도하세요.", 400
 
 @app.errorhandler(413)
 def too_large(_):

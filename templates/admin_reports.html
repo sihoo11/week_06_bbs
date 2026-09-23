@@ -46,11 +46,11 @@
                 </div>
             </div>
             <div class="member-actions">
-                <form method="POST" action="/admin/reports/{{ r.id }}/dismiss" class="btn-form">
+                <form method="POST" action="/admin/reports/{{ r.id }}/dismiss" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="text-btn">기각</button>
                 </form>
                 {% if r.exists %}
-                <form method="POST" action="/admin/reports/{{ r.id }}/remove-content" class="btn-form" onsubmit="return confirm('신고된 콘텐츠를 삭제하시겠습니까?')">
+                <form method="POST" action="/admin/reports/{{ r.id }}/remove-content" class="btn-form" onsubmit="return confirm('신고된 콘텐츠를 삭제하시겠습니까?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="text-btn text-btn-danger">삭제</button>
                 </form>
                 {% endif %}

@@ -37,11 +37,11 @@
                     {% if u.is_admin and admin_count <= 1 %}
                         <span class="settings-row-desc">마지막 관리자</span>
                     {% else %}
-                        <form method="POST" action="/admin/users/{{ u.id }}/toggle-admin" class="btn-form">
+                        <form method="POST" action="/admin/users/{{ u.id }}/toggle-admin" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-btn">{{ '관리자 해제' if u.is_admin else '관리자 지정' }}</button>
                         </form>
                         {% if not u.is_admin %}
-                        <form method="POST" action="/admin/users/{{ u.id }}/delete" class="btn-form">
+                        <form method="POST" action="/admin/users/{{ u.id }}/delete" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-btn text-btn-danger">삭제</button>
                         </form>
                         {% endif %}

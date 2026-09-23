@@ -10,7 +10,7 @@
 {% block content %}
     <h1>공지 수정</h1>
 
-    <form method="POST" class="post-form">
+    <form method="POST" class="post-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div>
             <label for="title">제목</label>
             <input type="text" id="title" name="title" value="{{ post.title }}" required>

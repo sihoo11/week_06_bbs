@@ -1798,7 +1798,7 @@
                 {% if session.get("user_id") %}
                     <span class="username">{{ session.get("username") }}님</span>
                     <a href="/account">⚙️ 계정관리</a>
-                    <form method="POST" action="/logout">
+                    <form method="POST" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit">로그아웃</button>
                     </form>
                 {% else %}
@@ -1810,6 +1810,7 @@
         {% block nav_admin %}{% endblock %}
         {% block content %}{% endblock %}
     </div>
+    <script>const CSRF_TOKEN = {{ csrf_token() | tojson }};</script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

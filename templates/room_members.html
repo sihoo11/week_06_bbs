@@ -21,7 +21,7 @@
                 <div class="settings-row-label">공개방으로 전환</div>
                 <div class="settings-row-desc">켜면 누구나 목록에서 보고 바로 참여할 수 있어요</div>
             </div>
-            <form method="POST" action="/chat/{{ room.id }}/visibility">
+            <form method="POST" action="/chat/{{ room.id }}/visibility"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label class="toggle-switch">
                     <input type="checkbox" {% if room.is_public %}checked{% endif %} onchange="this.form.submit()">
                     <span class="toggle-slider"></span>
@@ -33,7 +33,7 @@
                 <div class="settings-row-label">🐢 슬로우 모드</div>
                 <div class="settings-row-desc">설정한 시간마다 한 번만 메시지를 보낼 수 있어요</div>
             </div>
-            <form method="POST" action="/chat/{{ room.id }}/slowmode">
+            <form method="POST" action="/chat/{{ room.id }}/slowmode"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <select name="seconds" class="settings-select" onchange="this.form.submit()">
                     <option value="0" {% if room.slow_mode_seconds == 0 %}selected{% endif %}>끄기</option>
                     <option value="5" {% if room.slow_mode_seconds == 5 %}selected{% endif %}>5초</option>
@@ -51,8 +51,8 @@
 
     {% for role in roles %}
     <div class="role-card">
-        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/update" id="role-update-{{ role.id }}"></form>
-        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/delete" id="role-delete-{{ role.id }}"></form>
+        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/update" id="role-update-{{ role.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
+        <form method="POST" action="/chat/{{ room.id }}/roles/{{ role.id }}/delete" id="role-delete-{{ role.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
 
         <div class="role-card-header">
             <input type="color" name="color" form="role-update-{{ role.id }}" value="{{ role.color }}" class="role-color-input">
@@ -108,7 +108,7 @@
     </div>
     {% endfor %}
 
-    <form method="POST" action="/chat/{{ room.id }}/roles" class="new-role-form">
+    <form method="POST" action="/chat/{{ room.id }}/roles" class="new-role-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="color" name="color" value="#6b7280" class="role-color-input">
         <input type="text" name="name" placeholder="새 역할 이름" required>
         <button type="submit">역할 만들기</button>
@@ -117,7 +117,7 @@
 
     {% if perms.manage_members %}
     <div class="section-heading">멤버 초대</div>
-    <form method="POST" class="search-form">
+    <form method="POST" class="search-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="text" name="username" placeholder="초대할 사용자 아이디" required>
         <button type="submit">초대</button>
     </form>
@@ -147,7 +147,7 @@
             {% if member.username != room.created_by %}
             <div class="member-actions">
                 {% if perms.manage_roles and roles %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/role" class="btn-form">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/role" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <select name="role_id" class="settings-select" style="font-size: 12px; padding: 5px 8px;" onchange="this.form.submit()">
                         <option value="">역할 없음</option>
                         {% for role in roles %}
@@ -158,11 +158,11 @@
                 {% endif %}
                 {% if perms.manage_members %}
                 {% if member.is_timed_out %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout" class="btn-form">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/untimeout" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="text-btn">타임아웃 해제</button>
                 </form>
                 {% else %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/timeout" class="btn-form" style="gap: 4px;">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/timeout" class="btn-form" style="gap: 4px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <select name="duration" class="settings-select" style="font-size: 12px; padding: 5px 8px;">
                         <option value="5">5분</option>
                         <option value="10">10분</option>
@@ -171,7 +171,7 @@
                     <button type="submit" class="text-btn">타임아웃</button>
                 </form>
                 {% endif %}
-                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove" class="btn-form">
+                <form method="POST" action="/chat/{{ room.id }}/members/{{ member.username }}/remove" class="btn-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="text-btn text-btn-danger">내보내기</button>
                 </form>
                 {% endif %}

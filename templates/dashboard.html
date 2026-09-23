@@ -252,7 +252,7 @@
       <div class="nav-right">
         {% if session.get("username") %}
           <span class="username">{{ session.username }}님</span>
-          <form method="POST" action="/logout">
+          <form method="POST" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit">로그아웃</button>
           </form>
         {% else %}
