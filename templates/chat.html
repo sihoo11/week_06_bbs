@@ -31,13 +31,18 @@
     <div class="pinned-bar" id="pinned-bar" {% if not pinned %}hidden{% endif %}>
         <span class="pinned-icon">📌</span>
         <span class="pinned-content" id="pinned-content">
-            {% if pinned %}<span class="pinned-author">{{ pinned.username }}</span><span class="pinned-text">{{ pinned.content }}</span>{% endif %}
+            {% if pinned %}<span class="pinned-author">{{ pinned.username }}</span><span class="pinned-text">{{ pinned.content or '📷 사진' }}</span>{% endif %}
         </span>
+        {% if can_pin %}
         <button type="button" class="room-manage-btn" id="unpin-btn">고정 해제</button>
+        {% endif %}
     </div>
 
     <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
+            {% if has_more %}
+            <button type="button" class="load-more-btn" id="load-more-btn">이전 메시지 더 보기</button>
+            {% endif %}
             {% for m in messages %}
             <div class="chat-message{% if m.username == session.get('username') %} own{% endif %}" data-id="{{ m.id }}" data-username="{{ m.username }}">
                 <div class="comment-header">
@@ -56,7 +61,7 @@
         </div>
 
         <form id="chat-form">
-            <textarea id="chat-input" placeholder="{{ '메시지를 입력하세요...' if room.is_dm else '메시지를 입력하세요... (@아이디 로 멘션)' }}"></textarea>
+            <textarea id="chat-input" maxlength="1000" placeholder="{{ '메시지를 입력하세요... (Shift+Enter 줄바꿈)' if room.is_dm else '메시지를 입력하세요... (@아이디 로 멘션, Shift+Enter 줄바꿈)' }}"></textarea>
             <input type="file" id="chat-image-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
             <div class="chat-send-group">
                 <button type="button" id="attach-btn" class="chat-attach-btn" title="사진 보내기">📷</button>
@@ -76,6 +81,7 @@
     const CURRENT_USERNAME = {{ session.get('username') | tojson }};
     const IS_ADMIN = {{ (session.get('is_admin') or false) | tojson }};
     const CAN_MANAGE_MESSAGES = {{ (can_manage_messages or false) | tojson }};
+    const CAN_PIN = {{ (can_pin or false) | tojson }};
     const messagesEl = document.getElementById('chat-messages');
     const formEl = document.getElementById('chat-form');
     const inputEl = document.getElementById('chat-input');
@@ -106,9 +112,20 @@
         return d.innerHTML;
     }
 
+    function isNearBottom() {
+        return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+    }
+
     function appendMessage(msg) {
+        // 이전 대화를 읽는 중이면 새 메시지가 와도 스크롤을 억지로 내리지 않는다
+        const stick = isNearBottom() || msg.username === CURRENT_USERNAME;
+        messagesEl.appendChild(buildMessage(msg, true));
+        if (stick) messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function buildMessage(msg, animate) {
         const div = document.createElement('div');
-        div.className = 'chat-message message-pop-in' + (msg.username === CURRENT_USERNAME ? ' own' : '');
+        div.className = 'chat-message' + (animate ? ' message-pop-in' : '') + (msg.username === CURRENT_USERNAME ? ' own' : '');
         div.dataset.id = msg.id;
         div.dataset.username = msg.username;
         div.innerHTML = `
@@ -132,17 +149,50 @@
             img.src = msg.image;
             img.alt = '사진';
             img.className = 'chat-image';
-            img.addEventListener('load', () => { messagesEl.scrollTop = messagesEl.scrollHeight; });
+            img.loading = 'lazy';
+            if (animate) img.addEventListener('load', () => { if (isNearBottom()) messagesEl.scrollTop = messagesEl.scrollHeight; });
             link.appendChild(img);
             div.appendChild(link);
         }
-        messagesEl.appendChild(div);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+    }
+
+    const loadMoreBtnEl = document.getElementById('load-more-btn');
+    if (loadMoreBtnEl) {
+        loadMoreBtnEl.addEventListener('click', async () => {
+            const first = messagesEl.querySelector('.chat-message');
+            const before = first ? first.dataset.id : 0;
+            loadMoreBtnEl.disabled = true;
+            try {
+                const res = await fetch(`/chat/${ROOM_ID}/messages?before=${before}`);
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                // 위에 메시지를 끼워 넣어도 지금 보던 위치가 그대로 유지되도록 높이 차이만큼 보정한다
+                const prevHeight = messagesEl.scrollHeight;
+                const fragment = document.createDocumentFragment();
+                data.messages.forEach((m) => fragment.appendChild(buildMessage(m, false)));
+                loadMoreBtnEl.after(fragment);
+                messagesEl.scrollTop += messagesEl.scrollHeight - prevHeight;
+                if (!data.has_more) loadMoreBtnEl.remove();
+            } catch (_) {
+                alert('이전 메시지를 불러오지 못했어요.');
+            } finally {
+                loadMoreBtnEl.disabled = false;
+            }
+        });
     }
 
     inputEl.addEventListener('input', () => {
         inputEl.style.height = 'auto';
         inputEl.style.height = Math.min(inputEl.scrollHeight, 100) + 'px';
+    });
+
+    // Enter 로 전송, Shift+Enter 로 줄바꿈. 한글 조합 중(isComposing)의 Enter 는 무시해야 마지막 글자가 두 번 가지 않는다.
+    inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            e.preventDefault();
+            formEl.requestSubmit();
+        }
     });
 
     formEl.addEventListener('submit', (e) => {
@@ -202,6 +252,8 @@
 
         contextMessageId = Number(messageEl.dataset.id);
         ctxDeleteBtnEl.hidden = !canDelete(messageEl.dataset.username);
+        ctxPinBtnEl.hidden = !CAN_PIN;
+        if (ctxDeleteBtnEl.hidden && ctxPinBtnEl.hidden) return;
 
         contextMenuEl.hidden = false;
         contextMenuEl.style.left = e.clientX + 'px';
@@ -272,6 +324,17 @@
 
     socket.on('send_error', ({ message }) => {
         alert(message);
+    });
+
+    // 방에서 내보내졌거나 방이 삭제되면 목록으로 돌아간다
+    socket.on('kicked', ({ message }) => {
+        alert(message);
+        location.href = '/chat';
+    });
+
+    // 페이지를 떠날 때 접속자 목록에서 바로 빠지도록 알린다
+    window.addEventListener('pagehide', () => {
+        socket.emit('leave', { room_id: ROOM_ID });
     });
 
     socket.on('online_users', ({ usernames }) => {

@@ -52,7 +52,7 @@
     <form method="GET" action="/" class="search-form">
         {% if category %}<input type="hidden" name="category" value="{{ category }}">{% endif %}
         {% if sort != 'latest' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-        <input type="text" name="q" placeholder="제목·내용으로 검색..." value="{{ q }}">
+        <input type="text" name="q" placeholder="제목·내용·작성자로 검색..." value="{{ q }}">
         <button type="submit">검색</button>
     </form>
 

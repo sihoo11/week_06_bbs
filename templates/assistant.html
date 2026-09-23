@@ -10,6 +10,10 @@
 {% block content %}
     <h1>🏫 반장 학교생활 도우미</h1>
 
+    {% if not session.get("user_id") %}
+    <div class="error-message">🔒 AI 기능은 <a href="{{ url_for('login', next=request.path) }}">로그인</a>한 뒤에 쓸 수 있어요.</div>
+    {% endif %}
+
     <div class="section-heading">🍚 오늘의 급식 (나이스 공공데이터 + AI 브리핑)</div>
     <div class="settings-card" style="padding: 20px;">
         <form method="post" class="assistant-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -101,6 +105,10 @@
 
     function appendMessage(role, content) {
         removeEmptyNote();
+        return appendMessageEl(role, content);
+    }
+
+    function appendMessageEl(role, content) {
         const div = document.createElement('div');
         div.className = 'chat-message message-pop-in' + (role === 'user' ? ' own' : '');
         div.innerHTML = `
@@ -112,13 +120,18 @@
         div.querySelector('.comment-content').textContent = content;
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
     }
 
     async function postChat(message) {
         const formData = new FormData();
         formData.append('message', message);
-        const res = await fetch('/assistant/chat', { method: 'POST', body: formData, headers: { 'X-CSRFToken': CSRF_TOKEN } });
-        return (await res.json()).reply;
+        try {
+            const res = await fetch('/assistant/chat', { method: 'POST', body: formData, headers: { 'X-CSRFToken': CSRF_TOKEN } });
+            return (await res.json()).reply;
+        } catch (_) {
+            return '서버와 연결하지 못했어요. 잠시 뒤에 다시 시도하세요.';
+        }
     }
 
     inputEl.addEventListener('input', () => {
@@ -133,7 +146,13 @@
         inputEl.value = '';
         inputEl.style.height = 'auto';
         appendMessage('user', message);
-        appendMessage('assistant', await postChat(message));
+        // 답을 기다리는 동안 '생각 중' 표시를 두고, 답이 오면 그 자리를 채운다
+        const pending = appendMessage('assistant', '반장이 생각 중이에요…');
+        const submitBtn = formEl.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+        pending.querySelector('.comment-content').textContent = await postChat(message);
+        if (submitBtn) submitBtn.disabled = false;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
     });
 
     resetBtnEl.addEventListener('click', async () => {

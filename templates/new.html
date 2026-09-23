@@ -18,8 +18,8 @@
             <option value="{{ c }}" {% if form.get('category') == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="title" placeholder="제목을 입력하세요" value="{{ form.get('title', '') }}" required>
-        <textarea name="content" placeholder="내용을 입력하세요 (@아이디 로 친구를 부를 수 있어요)" required>{{ form.get('content', '') }}</textarea>
+        <input type="text" name="title" maxlength="100" placeholder="제목을 입력하세요" value="{{ form.get('title', '') }}" required>
+        <textarea name="content" maxlength="10000" placeholder="내용을 입력하세요 (@아이디 로 친구를 부를 수 있어요)" required>{{ form.get('content', '') }}</textarea>
 
         <label class="form-label" for="image">🖼️ 사진 첨부 (선택, 5MB 이하)</label>
         <input type="file" name="image" id="image" accept="image/png,image/jpeg,image/gif,image/webp">

@@ -2474,6 +2474,51 @@
             vertical-align: -1px;
         }
 
+        .mention {
+            color: #3182f6;
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        .mention:hover { text-decoration: underline; }
+
+        .post-content a:not(.mention), .comment-content a:not(.mention) {
+            color: #3182f6;
+            word-break: break-all;
+        }
+
+        .error-page {
+            text-align: center;
+            padding: 48px 16px;
+        }
+
+        .error-page .error-code {
+            font-size: 48px;
+            font-weight: 800;
+            color: #d1d6db;
+            margin-bottom: 8px;
+        }
+
+        .error-page p {
+            color: #4e5968;
+            margin-bottom: 24px;
+        }
+
+        .danger-zone {
+            border: 1px solid #fecaca;
+        }
+
+        .load-more-btn {
+            display: block !important;
+            margin: 0 auto 12px !important;
+            width: auto !important;
+            padding: 6px 14px !important;
+            font-size: 13px !important;
+            background: #f2f4f6 !important;
+            color: #4e5968 !important;
+            border-radius: 14px !important;
+        }
+
         .series-users { background: #3b82f6; }
         .series-posts { background: #f59e0b; }
         .series-comments { background: #10b981; }
@@ -2500,6 +2545,11 @@
             </div>
         </div>
         {% block nav_admin %}{% endblock %}
+        {% with flashes = get_flashed_messages(with_categories=true) %}
+            {% for category, message in flashes %}
+            <div class="{{ 'error-message' if category == 'error' else 'success-message' }}">{{ '❌' if category == 'error' else '✅' }} {{ message }}</div>
+            {% endfor %}
+        {% endwith %}
         {% block content %}{% endblock %}
     </div>
     <div class="toast-stack" id="toast-stack"></div>

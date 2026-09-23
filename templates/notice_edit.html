@@ -10,15 +10,17 @@
 {% block content %}
     <h1>공지 수정</h1>
 
+    {% if error %}<div class="error-message">❌ {{ error }}</div>{% endif %}
+
     <form method="POST" class="post-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div>
             <label for="title">제목</label>
-            <input type="text" id="title" name="title" value="{{ post.title }}" required>
+            <input type="text" id="title" name="title" maxlength="100" value="{{ post.title }}" required>
         </div>
 
         <div>
             <label for="content">내용</label>
-            <textarea id="content" name="content" required>{{ post.content }}</textarea>
+            <textarea id="content" name="content" maxlength="10000" required>{{ post.content }}</textarea>
         </div>
 
         <button type="submit">공지 수정</button>

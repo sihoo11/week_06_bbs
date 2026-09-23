@@ -56,4 +56,18 @@
             <a href="/change-password">🔐 비밀번호 변경</a>
         </li>
     </ul>
+
+    <details class="form-extra">
+        <summary>회원 탈퇴</summary>
+        <div class="settings-card danger-zone" style="padding: 20px;">
+            <div class="settings-row-desc" style="margin-bottom: 12px;">
+                탈퇴하면 프로필 사진, 좋아요·투표 기록, 알림, 채팅방 참여가 모두 사라져요.
+                작성한 글과 댓글은 '탈퇴한 회원'으로 남습니다.
+            </div>
+            <form method="POST" action="/account/delete" onsubmit="return confirm('정말 탈퇴할까요? 되돌릴 수 없어요.')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="password" name="password" placeholder="비밀번호 확인" autocomplete="current-password" required>
+                <button type="submit" class="delete-btn">탈퇴하기</button>
+            </form>
+        </div>
+    </details>
 {% endblock %}

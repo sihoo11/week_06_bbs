@@ -8,12 +8,14 @@ import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import openai
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFError, CSRFProtect
+from markupsafe import Markup, escape
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -59,7 +61,10 @@ TIMEOUT_DURATIONS = {"5": "+5 minutes", "10": "+10 minutes", "60": "+1 hours"}
 BAN_DURATIONS = {"1": "+1 days", "7": "+7 days", "30": "+30 days"}
 ROOM_PERMISSION_KEYS = ["manage_room", "manage_members", "manage_messages", "announce", "manage_roles"]
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-MENTION_RE = re.compile(r"@([^\s@]+)")
+# 아이디 규칙(USERNAME_RE)과 같은 글자만 멘션으로 인식한다
+MENTION_RE = re.compile(r"@([A-Za-z0-9_가-힣]{2,20})")
+# 이스케이프된 본문에 적용하므로 &amp; 는 링크에 포함하고 &#34; 같은 다른 엔티티에서 멈춘다
+LINKIFY_RE = re.compile(r"(https?://(?:[^\s<&]|&amp;)+)|@([A-Za-z0-9_가-힣]{2,20})")
 
 CATEGORIES = ["자유", "질문", "과제", "분실물"]
 SORT_OPTIONS = {
@@ -68,6 +73,16 @@ SORT_OPTIONS = {
     "views": ("조회순", "posts.views DESC, posts.id DESC"),
 }
 POSTS_PER_PAGE = 15
+CHAT_PAGE_SIZE = 50
+
+# 입력 길이 제한 (너무 긴 글로 화면·DB가 망가지지 않도록)
+MAX_TITLE_LEN = 100
+MAX_CONTENT_LEN = 10000
+MAX_COMMENT_LEN = 1000
+MAX_CHAT_LEN = 1000
+MAX_ROOM_NAME_LEN = 30
+MAX_SLOW_MODE_SECONDS = 3600
+MIN_PASSWORD_LEN = 4
 
 # 확장자 → 파일 시그니처(매직 바이트). 확장자만 바꾼 가짜 이미지를 걸러낸다.
 UPLOAD_IMAGE_SIGNATURES = {
@@ -135,11 +150,83 @@ def delete_post_cascade(conn, post_id):
         conn.execute("DELETE FROM poll_votes WHERE poll_id = ?", (poll["id"],))
         conn.execute("DELETE FROM poll_options WHERE poll_id = ?", (poll["id"],))
         conn.execute("DELETE FROM polls WHERE id = ?", (poll["id"],))
+    for comment in conn.execute("SELECT id FROM comments WHERE post_id = ?", (post_id,)).fetchall():
+        resolve_reports(conn, "comment", comment["id"])
+    resolve_reports(conn, "post", post_id)
     conn.execute("DELETE FROM comments WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
     if post is not None:
         delete_uploaded_file(post["image"])
+
+
+def resolve_reports(conn, target_type, target_id):
+    """내용이 지워지면 그 내용에 걸린 대기 중 신고도 처리 완료로 바꾼다."""
+    conn.execute(
+        "UPDATE reports SET status = 'resolved' WHERE target_type = ? AND target_id = ? AND status = 'pending'",
+        (target_type, target_id),
+    )
+
+
+def delete_room_cascade(conn, room_id):
+    """채팅방과 메시지·사진·멤버·역할을 함께 지우고, 방에 접속해 있던 사람을 내보낸다."""
+    for msg in conn.execute("SELECT image FROM chat_messages WHERE room_id = ? AND image IS NOT NULL", (room_id,)):
+        delete_uploaded_file(msg["image"])
+    conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM chat_room_members WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM chat_room_roles WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM chat_rooms WHERE id = ?", (room_id,))
+    socketio.emit("kicked", {"message": "채팅방이 삭제되었습니다."}, to=str(room_id))
+    room_online_users.pop(str(room_id), None)
+
+
+def delete_user_cascade(conn, user):
+    """회원을 지운다. 글·댓글은 '탈퇴한 회원'으로 남기고, 아이디로 연결된 권한(방 멤버·방장)은 모두 끊는다.
+    그래야 나중에 같은 아이디로 가입한 사람이 예전 채팅방이나 DM에 들어가지 못한다."""
+    username = user["username"]
+    for room in conn.execute("SELECT room_id FROM chat_room_members WHERE username = ?", (username,)).fetchall():
+        kick_from_room(room["room_id"], username, "회원 탈퇴로 채팅방에서 나갔습니다.")
+    conn.execute("DELETE FROM chat_room_members WHERE username = ?", (username,))
+    conn.execute("UPDATE chat_rooms SET created_by = NULL WHERE created_by = ?", (username,))
+    conn.execute("DELETE FROM post_likes WHERE user_id = ?", (user["id"],))
+    conn.execute("DELETE FROM poll_votes WHERE user_id = ?", (user["id"],))
+    conn.execute("DELETE FROM notifications WHERE user_id = ?", (user["id"],))
+    conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+    delete_uploaded_file(user["avatar"])
+
+
+def kick_from_room(room_id, username, message):
+    """실시간 채팅방에 접속해 있는 해당 사용자의 소켓을 방에서 빼고 안내한다."""
+    room_id_str = str(room_id)
+    sids = [sid for sid, name in room_online_users[room_id_str].items() if name == username]
+    for sid in sids:
+        room_online_users[room_id_str].pop(sid, None)
+        socketio.server.leave_room(sid, room_id_str, namespace="/")
+        socketio.emit("kicked", {"message": message}, to=sid)
+    if sids:
+        broadcast_online_users(room_id_str)
+
+
+def login_redirect():
+    """로그인 페이지로 보내고, 로그인 후 원래 보던 페이지로 돌아오게 한다."""
+    flash("로그인이 필요합니다.", "error")
+    next_url = request.full_path.rstrip("?") if request.method == "GET" else safe_redirect_target(
+        urlparse(request.referrer or "").path, "/"
+    )
+    return redirect(url_for("login", next=next_url))
+
+
+def read_post_form():
+    """글쓰기/수정 폼의 제목·내용을 검사해 (제목, 내용) 을 반환. 문제가 있으면 ValueError."""
+    title = request.form.get("title", "").strip()
+    content = request.form.get("content", "").strip()
+    if not title or not content:
+        raise ValueError("제목과 내용을 모두 입력하세요.")
+    if len(title) > MAX_TITLE_LEN:
+        raise ValueError(f"제목은 {MAX_TITLE_LEN}자 이하로 입력하세요.")
+    if len(content) > MAX_CONTENT_LEN:
+        raise ValueError(f"내용은 {MAX_CONTENT_LEN}자 이하로 입력하세요.")
+    return title, content
 
 
 def notify(conn, user_id, message, link):
@@ -155,7 +242,7 @@ def notify(conn, user_id, message, link):
 
 def notify_mentions(conn, text, sender_username, message, link, allowed_usernames=None):
     """본문에서 @아이디 를 찾아 해당 사용자에게 알림. allowed_usernames 가 있으면 그 안의 사용자만."""
-    mentioned = {name.rstrip(".,!?)") for name in MENTION_RE.findall(text)} - {sender_username}
+    mentioned = set(MENTION_RE.findall(text)) - {sender_username}
     for name in mentioned:
         if allowed_usernames is not None and name not in allowed_usernames:
             continue
@@ -536,6 +623,42 @@ def inject_globals():
     return {"unread_notifications": unread, "current_user": g.get("user"), "CATEGORIES": CATEGORIES}
 
 
+@app.template_filter("linkify")
+def linkify(text):
+    """본문을 HTML 이스케이프한 뒤 링크(http...)와 실제로 있는 회원의 @멘션만 클릭할 수 있게 바꾼다."""
+    html = str(escape(text or ""))
+    names = set(MENTION_RE.findall(html))
+    existing = set()
+    if names:
+        conn = get_db()
+        placeholders = ",".join("?" * len(names))
+        existing = {r["username"] for r in conn.execute(
+            f"SELECT username FROM users WHERE username IN ({placeholders})", list(names)
+        )}
+        conn.close()
+
+    def replace(m):
+        if m.group(1):
+            return f'<a href="{m.group(1)}" target="_blank" rel="noopener nofollow">{m.group(1)}</a>'
+        if m.group(2) in existing:
+            return f'<a href="{url_for("profile", username=m.group(2))}" class="mention">@{m.group(2)}</a>'
+        return m.group(0)
+
+    # 링크와 멘션을 한 번에 바꿔야 링크 안의 @가 다시 멘션으로 바뀌지 않는다
+    html = LINKIFY_RE.sub(replace, html)
+    return Markup(html)
+
+
+@app.after_request
+def render_error_page(response):
+    """라우트가 돌려준 짧은 오류 문구("글 없음", 403 등)를 사이트 디자인의 오류 페이지로 감싼다."""
+    if response.status_code >= 400 and response.mimetype == "text/html" and not response.direct_passthrough:
+        body = response.get_data(as_text=True)
+        if body and not body.lstrip().startswith("<"):
+            response.set_data(render_template("error.html", message=body, status=response.status_code))
+    return response
+
+
 def read_poll_form():
     """글쓰기 폼의 투표 입력값을 (질문, [선택지]) 로 반환. 투표를 만들지 않으면 None."""
     question = request.form.get("poll_question", "").strip()
@@ -561,8 +684,11 @@ def index():
     where = ["posts.is_notice = 0"]
     params = []
     if q:
-        where.append("(posts.title LIKE ? OR posts.content LIKE ?)")
-        params += [f"%{q}%", f"%{q}%"]
+        # %, _ 를 글자 그대로 찾도록 이스케이프하고, 작성자 아이디로도 찾을 수 있게 한다
+        pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        where.append("""(posts.title LIKE ? ESCAPE '\\' OR posts.content LIKE ? ESCAPE '\\'
+                        OR posts.user_id IN (SELECT id FROM users WHERE username LIKE ? ESCAPE '\\'))""")
+        params += [pattern, pattern, pattern]
     if category:
         where.append("posts.category = ?")
         params.append(category)
@@ -660,16 +786,15 @@ def detail(post_id):
 @app.route("/new", methods=["GET", "POST"])
 def new():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     if request.method == "POST":
-        title = request.form["title"]
-        content = request.form["content"]
         category = request.form.get("category", "자유")
         if category not in CATEGORIES:
             category = "자유"
 
         try:
+            title, content = read_post_form()
             poll = read_poll_form()
             photo = request.files.get("image")
             image = save_uploaded_image(photo, "posts") if photo and photo.filename else None
@@ -704,7 +829,7 @@ def new():
 @app.route("/posts/<int:post_id>/edit", methods=["GET", "POST"])
 def edit(post_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -719,8 +844,6 @@ def edit(post_id):
         return "본인 또는 관리자만 수정 가능합니다.", 403
 
     if request.method == "POST":
-        title = request.form["title"]
-        content = request.form["content"]
         category = request.form.get("category", post["category"])
         if category not in CATEGORIES:
             category = post["category"]
@@ -728,12 +851,15 @@ def edit(post_id):
         image = post["image"]
         photo = request.files.get("image")
         try:
+            title, content = read_post_form()
             if photo and photo.filename:
                 image = save_uploaded_image(photo, "posts")
             elif request.form.get("remove_image"):
                 image = None
         except ValueError as e:
-            return render_template("edit.html", post=post, error=str(e))
+            # 입력하던 내용을 잃지 않도록 폼 값을 그대로 다시 보여준다
+            draft = dict(post, title=request.form.get("title", ""), content=request.form.get("content", ""))
+            return render_template("edit.html", post=draft, error=str(e))
         if image != post["image"]:
             delete_uploaded_file(post["image"])
 
@@ -752,7 +878,7 @@ def edit(post_id):
 @app.route("/posts/<int:post_id>/delete", methods=['POST'])
 def delete_post(post_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -775,7 +901,7 @@ def delete_post(post_id):
 @app.route("/posts/<int:post_id>/like", methods=["POST"])
 def toggle_like(post_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -786,21 +912,29 @@ def toggle_like(post_id):
     removed = conn.execute(
         "DELETE FROM post_likes WHERE post_id = ? AND user_id = ?", (post_id, session["user_id"])
     ).rowcount
+    already_notified = conn.execute(
+        "SELECT 1 FROM notifications WHERE user_id = ? AND link = ? AND message LIKE ? AND created_at > datetime('now', 'localtime', '-1 hours')",
+        (post["user_id"], url_for("detail", post_id=post_id), f"{session['username']}님이 회원님의 글을 좋아해요%"),
+    ).fetchone() is not None
     if not removed:
         conn.execute("INSERT INTO post_likes (post_id, user_id) VALUES (?, ?)", (post_id, session["user_id"]))
-        if post["user_id"] != session["user_id"]:
+        # 좋아요를 껐다 켰다 반복해도 알림이 쌓이지 않도록 1시간에 한 번만 보낸다
+        if post["user_id"] != session["user_id"] and not already_notified:
             notify(
                 conn, post["user_id"], f"{session['username']}님이 회원님의 글을 좋아해요: {post['title']}",
                 url_for("detail", post_id=post_id),
             )
     conn.commit()
+    like_count = conn.execute("SELECT COUNT(*) AS c FROM post_likes WHERE post_id = ?", (post_id,)).fetchone()["c"]
     conn.close()
+    if request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"liked": not removed, "like_count": like_count})
     return redirect(url_for("detail", post_id=post_id))
 
 @app.route("/polls/<int:poll_id>/vote", methods=["POST"])
 def vote_poll(poll_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     conn = get_db()
     poll = conn.execute("SELECT * FROM polls WHERE id = ?", (poll_id,)).fetchone()
@@ -824,65 +958,98 @@ def vote_poll(poll_id):
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_가-힣]{2,20}$")
 
+def start_session(user):
+    """로그인 처리. 이전 세션을 비워 세션 고정 공격을 막는다."""
+    session.clear()
+    session['user_id'] = user['id']
+    session['username'] = user['username']
+    session['is_admin'] = user['is_admin']
+
+def password_error(password):
+    if len(password) < MIN_PASSWORD_LEN:
+        return f'비밀번호는 {MIN_PASSWORD_LEN}자 이상이어야 합니다.'
+    return None
+
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
+    if "user_id" in session:
+        return redirect('/')
     if request.method == 'POST':
-        username = request.form['username'].strip()
-        password = request.form['password']
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        password_confirm = request.form.get('password_confirm', password)
         # @멘션과 프로필 주소에 쓰이므로 공백·특수문자를 막는다
         if not USERNAME_RE.match(username):
-            return render_template('signup.html', error='아이디는 2~20자의 한글, 영문, 숫자, _ 만 쓸 수 있습니다.')
-        hashed_pw = generate_password_hash(password)
+            return render_template('signup.html', error='아이디는 2~20자의 한글, 영문, 숫자, _ 만 쓸 수 있습니다.', username=username)
+        error = password_error(password)
+        if error is None and password != password_confirm:
+            error = '비밀번호 확인이 일치하지 않습니다.'
+        if error:
+            return render_template('signup.html', error=error, username=username)
+
+        conn = get_db()
         try:
-            conn = get_db()
-            conn.execute('''
-            INSERT INTO users (username, password_hash) VALUES (?, ?)
-            ''',
-            (username, hashed_pw)
+            cur = conn.execute(
+                'INSERT INTO users (username, password_hash) VALUES (?, ?)',
+                (username, generate_password_hash(password)),
             )
             conn.commit()
-            conn.close()
-            return redirect('/login')
         except sqlite3.IntegrityError:
-            return render_template('signup.html', error='이미 존재하는 아이디입니다.')
+            conn.close()
+            return render_template('signup.html', error='이미 존재하는 아이디입니다.', username=username)
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+        conn.close()
+        start_session(user)
+        flash(f'{username}님, 가입을 환영해요! 계정관리에서 학교 정보를 등록하면 시간표를 볼 수 있어요.', 'success')
+        return redirect('/')
     return render_template('signup.html')
+
+def prune_login_failures():
+    """잠금이 끝난 기록을 정리해 메모리가 계속 늘지 않게 한다."""
+    if len(login_failures) > 1000:
+        now = time.time()
+        for key in [k for k, (count, until) in login_failures.items() if until and until < now]:
+            login_failures.pop(key, None)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    next_url = safe_redirect_target(request.values.get('next'), '/')
+    if "user_id" in session:
+        return redirect(next_url)
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
 
+        prune_login_failures()
         key = (request.remote_addr or "", username)
         failure = login_failures.get(key)
         if failure and failure[1] > time.time():
             wait_minutes = math.ceil((failure[1] - time.time()) / 60)
-            return render_template('login.html', error=f'로그인 시도가 너무 많습니다. {wait_minutes}분 뒤에 다시 시도하세요.')
+            return render_template('login.html', error=f'로그인 시도가 너무 많습니다. {wait_minutes}분 뒤에 다시 시도하세요.',
+                                   username=username, next=next_url)
 
         conn = get_db()
-        user = conn.execute('''
-         SELECT * FROM users WHERE username = ?
-        ''',
-        (username, )
-        ).fetchone()
+        user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
         if user and check_password_hash(user['password_hash'], password):
             login_failures.pop(key, None)
             if is_banned(user):
                 reason = f" (사유: {user['ban_reason']})" if user['ban_reason'] else ""
-                return render_template('login.html', error=f"{user['banned_until'][:16]}까지 이용이 정지된 계정입니다.{reason}")
-            session['user_id'] = user['id']
-            session['username'] = user['username']
-            session['is_admin'] = user['is_admin']
-            return redirect('/')
+                return render_template('login.html', error=f"{user['banned_until'][:16]}까지 이용이 정지된 계정입니다.{reason}",
+                                       username=username, next=next_url)
+            start_session(user)
+            return redirect(next_url)
 
-        count = (failure[0] if failure else 0) + 1
+        # 잠금이 풀린 뒤에는 실패 횟수를 처음부터 센다
+        count = (failure[0] if failure and not failure[1] else 0) + 1
         if count >= LOGIN_MAX_FAILURES:
             login_failures[key] = [0, time.time() + LOGIN_LOCK_SECONDS]
-            return render_template('login.html', error=f'비밀번호를 {LOGIN_MAX_FAILURES}번 틀려 5분 동안 로그인이 제한됩니다.')
-        login_failures[key] = [count, 0]
-        return render_template('login.html', error=f'아이디 또는 비밀번호가 틀렸습니다. ({count}/{LOGIN_MAX_FAILURES})')
-    return render_template('login.html')
+            error = f'비밀번호를 {LOGIN_MAX_FAILURES}번 틀려 5분 동안 로그인이 제한됩니다.'
+        else:
+            login_failures[key] = [count, 0]
+            error = f'아이디 또는 비밀번호가 틀렸습니다. ({count}/{LOGIN_MAX_FAILURES})'
+        return render_template('login.html', error=error, username=username, next=next_url)
+    return render_template('login.html', next=next_url)
 
 @app.route('/logout', methods=['POST'])
 def logout():
@@ -892,7 +1059,7 @@ def logout():
 @app.route('/account', methods=['GET', 'POST'])
 def account():
     if "user_id" not in session:
-        return redirect('/login')
+        return login_redirect()
 
     user = g.user
     if request.method == 'POST':
@@ -923,6 +1090,25 @@ def account():
         return render_template('account.html', user=user, success='프로필이 저장되었습니다.')
 
     return render_template('account.html', user=user)
+
+@app.route('/account/delete', methods=['POST'])
+def delete_account():
+    if "user_id" not in session:
+        return login_redirect()
+
+    user = g.user
+    if not check_password_hash(user["password_hash"], request.form.get("password", "")):
+        return render_template('account.html', user=user, error='비밀번호가 틀려 탈퇴하지 못했습니다.')
+    if user["is_admin"]:
+        return render_template('account.html', user=user, error='관리자는 탈퇴할 수 없습니다. 먼저 다른 관리자에게 권한 해제를 요청하세요.')
+
+    conn = get_db()
+    delete_user_cascade(conn, user)
+    conn.commit()
+    conn.close()
+    session.clear()
+    flash('탈퇴가 완료되었습니다. 그동안 이용해 주셔서 고마워요.', 'success')
+    return redirect('/')
 
 @app.route('/users/<username>')
 def profile(username):
@@ -955,7 +1141,7 @@ def profile(username):
 @app.route('/notifications')
 def notifications():
     if "user_id" not in session:
-        return redirect('/login')
+        return login_redirect()
     conn = get_db()
     rows = conn.execute(
         "SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50", (session["user_id"],)
@@ -966,7 +1152,7 @@ def notifications():
 @app.route('/notifications/<int:notification_id>/open')
 def open_notification(notification_id):
     if "user_id" not in session:
-        return redirect('/login')
+        return login_redirect()
     conn = get_db()
     row = conn.execute(
         "SELECT * FROM notifications WHERE id = ? AND user_id = ?", (notification_id, session["user_id"])
@@ -982,7 +1168,7 @@ def open_notification(notification_id):
 @app.route('/notifications/read-all', methods=['POST'])
 def read_all_notifications():
     if "user_id" not in session:
-        return redirect('/login')
+        return login_redirect()
     conn = get_db()
     conn.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (session["user_id"],))
     conn.commit()
@@ -992,7 +1178,7 @@ def read_all_notifications():
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password():
     if "user_id" not in session:
-        return redirect('/login')
+        return login_redirect()
 
     if request.method == 'POST':
         old_password = request.form['old_password']
@@ -1001,6 +1187,9 @@ def change_password():
 
         if new_password != new_password_confirm:
             return render_template('change_password.html', error='새 비밀번호가 일치하지 않습니다.')
+        error = password_error(new_password)
+        if error:
+            return render_template('change_password.html', error=error)
 
         conn = get_db()
         user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
@@ -1022,11 +1211,14 @@ def change_password():
 @app.route("/posts/<int:post_id>/comments", methods=["POST"])
 def create_comment(post_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     content = request.form.get("content", "").strip()
     if not content:
         return redirect(url_for("detail", post_id=post_id))
+    if len(content) > MAX_COMMENT_LEN:
+        flash(f"댓글은 {MAX_COMMENT_LEN}자 이하로 입력하세요.", "error")
+        return redirect(url_for("detail", post_id=post_id) + "#comments")
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -1050,7 +1242,7 @@ def create_comment(post_id):
 @app.route("/comments/<int:comment_id>/edit", methods=["POST"])
 def edit_comment(comment_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     conn = get_db()
     comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
@@ -1062,7 +1254,9 @@ def edit_comment(comment_id):
         return "본인 댓글만 수정할 수 있습니다.", 403
 
     content = request.form.get("content", "").strip()
-    if content:
+    if len(content) > MAX_COMMENT_LEN:
+        flash(f"댓글은 {MAX_COMMENT_LEN}자 이하로 입력하세요.", "error")
+    elif content:
         conn.execute(
             "UPDATE comments SET content = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (content, comment_id),
@@ -1074,6 +1268,9 @@ def edit_comment(comment_id):
 
 @app.route("/comments/<int:comment_id>/delete", methods=["POST"])
 def delete_comment(comment_id):
+    if "user_id" not in session:
+        return login_redirect()
+
     conn = get_db()
     comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
     if comment is None:
@@ -1089,14 +1286,15 @@ def delete_comment(comment_id):
         return "권한 없음", 403
 
     conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+    resolve_reports(conn, "comment", comment_id)
     conn.commit()
     conn.close()
-    return redirect(url_for("detail", post_id=comment["post_id"]))
+    return redirect(url_for("detail", post_id=comment["post_id"]) + "#comments")
 
 @app.route("/posts/<int:post_id>/report", methods=["POST"])
 def report_post(post_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -1108,18 +1306,19 @@ def report_post(post_id):
     try:
         conn.execute(
             "INSERT INTO reports (target_type, target_id, reporter_username, reason) VALUES ('post', ?, ?, ?)",
-            (post_id, session["username"], reason),
+            (post_id, session["username"], reason[:200]),
         )
         conn.commit()
+        flash("신고가 접수되었어요. 관리자가 확인할게요.", "success")
     except sqlite3.IntegrityError:
-        pass
+        flash("이미 신고한 게시글이에요.", "error")
     conn.close()
     return redirect(url_for("detail", post_id=post_id))
 
 @app.route("/comments/<int:comment_id>/report", methods=["POST"])
 def report_comment(comment_id):
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return login_redirect()
 
     conn = get_db()
     comment = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
@@ -1131,18 +1330,19 @@ def report_comment(comment_id):
     try:
         conn.execute(
             "INSERT INTO reports (target_type, target_id, reporter_username, reason) VALUES ('comment', ?, ?, ?)",
-            (comment_id, session["username"], reason),
+            (comment_id, session["username"], reason[:200]),
         )
         conn.commit()
+        flash("신고가 접수되었어요. 관리자가 확인할게요.", "success")
     except sqlite3.IntegrityError:
-        pass
+        flash("이미 신고한 댓글이에요.", "error")
     conn.close()
     return redirect(url_for("detail", post_id=comment["post_id"]))
 
 @app.route("/notice/new", methods=["GET", "POST"])
 def new_notice():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
@@ -1152,8 +1352,10 @@ def new_notice():
         return "관리자만 공지를 작성할 수 있습니다.", 403
 
     if request.method == "POST":
-        title = request.form["title"]
-        content = request.form["content"]
+        try:
+            title, content = read_post_form()
+        except ValueError as e:
+            return render_template("notice_new.html", error=str(e), form=request.form)
         user_id = session["user_id"]
         conn = get_db()
         conn.execute(
@@ -1164,12 +1366,12 @@ def new_notice():
         conn.close()
         return redirect("/")
 
-    return render_template("notice_new.html")
+    return render_template("notice_new.html", form={})
 
 @app.route("/notice/<int:post_id>/edit", methods=["GET", "POST"])
 def edit_notice(post_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -1183,8 +1385,11 @@ def edit_notice(post_id):
         return "관리자만 공지를 수정할 수 있습니다.", 403
 
     if request.method == "POST":
-        title = request.form["title"]
-        content = request.form["content"]
+        try:
+            title, content = read_post_form()
+        except ValueError as e:
+            draft = dict(post, title=request.form.get("title", ""), content=request.form.get("content", ""))
+            return render_template("notice_edit.html", post=draft, error=str(e))
         conn = get_db()
         conn.execute(
             "UPDATE posts SET title = ?, content = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
@@ -1199,7 +1404,7 @@ def edit_notice(post_id):
 @app.route("/notice/<int:post_id>/delete", methods=["POST"])
 def delete_notice(post_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -1234,7 +1439,7 @@ def notices():
 @app.route("/admin/users")
 def admin_users():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
 
@@ -1253,7 +1458,7 @@ def admin_users():
 @app.route("/admin/users/<int:user_id>/toggle-admin", methods=["POST"])
 def toggle_user_admin(user_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
     if user_id == session["user_id"]:
@@ -1280,7 +1485,7 @@ def toggle_user_admin(user_id):
 @app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
 def delete_user(user_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
     if user_id == session["user_id"]:
@@ -1295,15 +1500,16 @@ def delete_user(user_id):
         conn.close()
         return "다른 관리자는 삭제할 수 없습니다. 먼저 권한을 해제하세요.", 400
 
-    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    delete_user_cascade(conn, target)
     conn.commit()
     conn.close()
+    flash(f"{target['username']} 회원을 삭제했습니다.", "success")
     return redirect(url_for("admin_users"))
 
 @app.route("/admin/users/<int:user_id>/ban", methods=["POST"])
 def ban_user(user_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
     if user_id == session["user_id"]:
@@ -1338,7 +1544,7 @@ def ban_user(user_id):
 @app.route("/admin/stats")
 def admin_stats():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
 
@@ -1386,7 +1592,7 @@ def admin_stats():
 @app.route("/admin/reports")
 def admin_reports():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
 
@@ -1434,20 +1640,26 @@ def admin_reports():
 @app.route("/admin/reports/<int:report_id>/dismiss", methods=["POST"])
 def dismiss_report(report_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
 
     conn = get_db()
-    conn.execute("UPDATE reports SET status = 'dismissed' WHERE id = ?", (report_id,))
-    conn.commit()
+    report = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    if report is not None:
+        # 같은 대상에 쌓인 다른 신고도 함께 기각한다
+        conn.execute(
+            "UPDATE reports SET status = 'dismissed' WHERE target_type = ? AND target_id = ? AND status = 'pending'",
+            (report["target_type"], report["target_id"]),
+        )
+        conn.commit()
     conn.close()
     return redirect(url_for("admin_reports"))
 
 @app.route("/admin/reports/<int:report_id>/remove-content", methods=["POST"])
 def remove_reported_content(report_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if not session.get("is_admin"):
         return "관리자만 접근할 수 있습니다.", 403
 
@@ -1457,24 +1669,26 @@ def remove_reported_content(report_id):
         conn.close()
         return "신고 내역을 찾을 수 없습니다.", 404
 
-    if report["target_type"] == "post":
-        delete_post_cascade(conn, report["target_id"])
-    else:
-        conn.execute("DELETE FROM comments WHERE id = ?", (report["target_id"],))
-
-    # 같은 대상을 신고한 모든 사람에게 처리 결과를 알린다
+    # 같은 대상을 신고한 모든 사람에게 처리 결과를 알린다 (삭제하면 신고가 처리 완료로 바뀌므로 먼저 모은다)
     reporters = conn.execute("""
         SELECT DISTINCT users.id FROM reports JOIN users ON users.username = reports.reporter_username
         WHERE reports.target_type = ? AND reports.target_id = ? AND reports.status = 'pending'
     """, (report["target_type"], report["target_id"])).fetchall()
     target_label = "게시글" if report["target_type"] == "post" else "댓글"
+
+    if report["target_type"] == "post":
+        target = conn.execute("SELECT user_id, title AS preview FROM posts WHERE id = ?", (report["target_id"],)).fetchone()
+        delete_post_cascade(conn, report["target_id"])
+    else:
+        target = conn.execute("SELECT user_id, content AS preview FROM comments WHERE id = ?", (report["target_id"],)).fetchone()
+        conn.execute("DELETE FROM comments WHERE id = ?", (report["target_id"],))
+    resolve_reports(conn, report["target_type"], report["target_id"])
+
     for reporter in reporters:
         notify(conn, reporter["id"], f"신고하신 {target_label}이 관리자에 의해 삭제되었어요. 감사합니다!", url_for("index"))
-
-    conn.execute(
-        "UPDATE reports SET status = 'resolved' WHERE target_type = ? AND target_id = ? AND status = 'pending'",
-        (report["target_type"], report["target_id"]),
-    )
+    if target is not None:
+        notify(conn, target["user_id"],
+               f"회원님의 {target_label}이 운영 규칙 위반으로 삭제되었어요: {target['preview'][:30]}", url_for("notices"))
     conn.commit()
     conn.close()
     return redirect(url_for("admin_reports"))
@@ -1494,7 +1708,7 @@ def cached_school_data(key, loader):
 @app.route("/school")
 def school():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     user = g.user
     school_info = timetable = None
@@ -1535,7 +1749,7 @@ def school():
 @app.route("/assignments", methods=["POST"])
 def create_assignment():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     title = request.form.get("title", "").strip()
     subject = request.form.get("subject", "").strip() or None
@@ -1558,7 +1772,7 @@ def create_assignment():
 @app.route("/assignments/<int:assignment_id>/delete", methods=["POST"])
 def delete_assignment(assignment_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     row = conn.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
@@ -1582,10 +1796,10 @@ def dashboard():
 @app.route("/chat", methods=["GET", "POST"])
 def chat_rooms():
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     if request.method == "POST":
-        name = request.form.get("name", "").strip()
+        name = request.form.get("name", "").strip()[:MAX_ROOM_NAME_LEN]
         is_public = 1 if request.form.get("is_public") else 0
         if name:
             conn = get_db()
@@ -1644,7 +1858,7 @@ def chat_rooms():
 @app.route("/dm/<username>", methods=["POST"])
 def open_dm(username):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
     if username == session["username"]:
         return "자기 자신에게는 메시지를 보낼 수 없습니다.", 400
 
@@ -1701,14 +1915,14 @@ def upload_chat_image(room_id):
         conn.close()
         return jsonify({"error": str(e)}), 400
 
-    post_chat_message(conn, room, request.form.get("content", "").strip(), image=image)
+    post_chat_message(conn, room, request.form.get("content", "").strip()[:MAX_CHAT_LEN], image=image)
     conn.close()
     return jsonify({"ok": True})
 
 @app.route("/chat/<int:room_id>/join", methods=["POST"])
 def join_room_self(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1734,7 +1948,7 @@ def join_room_self(room_id):
 @app.route("/chat/rooms/<int:room_id>/delete", methods=["POST"])
 def delete_room(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1752,11 +1966,7 @@ def delete_room(room_id):
         conn.close()
         return "본인 또는 관리자만 삭제 가능합니다.", 403
 
-    for msg in conn.execute("SELECT image FROM chat_messages WHERE room_id = ? AND image IS NOT NULL", (room_id,)):
-        delete_uploaded_file(msg["image"])
-    conn.execute("DELETE FROM chat_rooms WHERE id = ?", (room_id,))
-    conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (room_id,))
-    conn.execute("DELETE FROM chat_room_members WHERE room_id = ?", (room_id,))
+    delete_room_cascade(conn, room_id)
     conn.commit()
     conn.close()
     return redirect("/chat")
@@ -1764,7 +1974,7 @@ def delete_room(room_id):
 @app.route("/chat/<int:room_id>")
 def chat_room(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1786,9 +1996,11 @@ def chat_room(room_id):
             pass
 
     rows = conn.execute(
-        "SELECT * FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT 100",
-        (room_id,),
+        "SELECT * FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT ?",
+        (room_id, CHAT_PAGE_SIZE + 1),
     ).fetchall()
+    has_more = len(rows) > CHAT_PAGE_SIZE
+    rows = rows[:CHAT_PAGE_SIZE]
 
     pinned = None
     if room["pinned_message_id"]:
@@ -1803,16 +2015,54 @@ def chat_room(room_id):
     is_owner = room["created_by"] == session.get("username")
     messages = list(reversed(rows))
     return render_template(
-        "chat.html", room=room, messages=messages, pinned=pinned, partner=partner,
+        "chat.html", room=room, messages=messages, pinned=pinned, partner=partner, has_more=has_more,
         is_owner=is_owner, can_announce=perms["announce"] and not room["is_dm"],
+        can_pin=can_pin_messages(room, perms),
         can_manage_settings=any(perms.values()) and not room["is_dm"],
         can_manage_messages=perms["manage_messages"],
     )
 
+@app.route("/chat/<int:room_id>/messages")
+def chat_history(room_id):
+    """before 보다 오래된 메시지를 CHAT_PAGE_SIZE 개씩 돌려준다 (위로 스크롤해 이전 대화 보기)."""
+    if "user_id" not in session:
+        return jsonify({"error": "로그인이 필요합니다."}), 401
+
+    conn = get_db()
+    room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
+    if room is None or not can_access_room(conn, room, session["username"]):
+        conn.close()
+        return jsonify({"error": "이 방을 볼 수 없습니다."}), 403
+
+    before = request.args.get("before", type=int) or 0
+    rows = conn.execute(
+        "SELECT * FROM chat_messages WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+        (room_id, before, CHAT_PAGE_SIZE + 1),
+    ).fetchall()
+    conn.close()
+    return jsonify({
+        "has_more": len(rows) > CHAT_PAGE_SIZE,
+        "messages": [message_payload(r) for r in reversed(rows[:CHAT_PAGE_SIZE])],
+    })
+
+def room_settings_view(conn, room, perms, error=None):
+    members = conn.execute("""
+        SELECT m.username, m.timeout_until, m.role_id,
+               r.name AS role_name, r.color AS role_color,
+               CASE WHEN m.timeout_until IS NOT NULL AND m.timeout_until > datetime('now', 'localtime')
+                    THEN 1 ELSE 0 END AS is_timed_out
+        FROM chat_room_members m
+        LEFT JOIN chat_room_roles r ON r.id = m.role_id
+        WHERE m.room_id = ?
+        ORDER BY m.id ASC
+    """, (room["id"],)).fetchall()
+    roles = conn.execute("SELECT * FROM chat_room_roles WHERE room_id = ? ORDER BY id ASC", (room["id"],)).fetchall()
+    return render_template("room_members.html", room=room, members=members, roles=roles, perms=perms, error=error)
+
 @app.route("/chat/<int:room_id>/members", methods=["GET", "POST"])
 def room_members(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1833,41 +2083,31 @@ def room_members(room_id):
         username = request.form.get("username", "").strip()
         target = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         if target is None:
-            roles = conn.execute("SELECT * FROM chat_room_roles WHERE room_id = ? ORDER BY id ASC", (room_id,)).fetchall()
+            page = room_settings_view(conn, room, perms, error="존재하지 않는 사용자입니다.")
             conn.close()
-            return render_template(
-                "room_members.html", room=room, members=[], roles=roles, perms=perms,
-                error="존재하지 않는 사용자입니다.",
-            )
+            return page
         try:
             conn.execute(
                 "INSERT INTO chat_room_members (room_id, username) VALUES (?, ?)",
                 (room_id, username),
             )
+            notify(conn, target["id"], f"{session['username']}님이 '{room['name']}' 채팅방에 초대했어요",
+                   url_for("chat_room", room_id=room_id))
             conn.commit()
+            flash(f"{username}님을 초대했어요.", "success")
         except sqlite3.IntegrityError:
-            pass
+            flash(f"{username}님은 이미 이 방의 멤버예요.", "error")
         conn.close()
         return redirect(url_for("room_members", room_id=room_id))
 
-    members = conn.execute("""
-        SELECT m.username, m.timeout_until, m.role_id,
-               r.name AS role_name, r.color AS role_color,
-               CASE WHEN m.timeout_until IS NOT NULL AND m.timeout_until > datetime('now', 'localtime')
-                    THEN 1 ELSE 0 END AS is_timed_out
-        FROM chat_room_members m
-        LEFT JOIN chat_room_roles r ON r.id = m.role_id
-        WHERE m.room_id = ?
-        ORDER BY m.id ASC
-    """, (room_id,)).fetchall()
-    roles = conn.execute("SELECT * FROM chat_room_roles WHERE room_id = ? ORDER BY id ASC", (room_id,)).fetchall()
+    page = room_settings_view(conn, room, perms)
     conn.close()
-    return render_template("room_members.html", room=room, members=members, roles=roles, perms=perms)
+    return page
 
 @app.route("/chat/<int:room_id>/members/<username>/remove", methods=["POST"])
 def remove_room_member(room_id, username):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1890,12 +2130,13 @@ def remove_room_member(room_id, username):
     )
     conn.commit()
     conn.close()
+    kick_from_room(room_id, username, "채팅방에서 내보내졌습니다.")
     return redirect(url_for("room_members", room_id=room_id))
 
 @app.route("/chat/<int:room_id>/members/<username>/timeout", methods=["POST"])
 def timeout_room_member(room_id, username):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1930,7 +2171,7 @@ def timeout_room_member(room_id, username):
 @app.route("/chat/<int:room_id>/members/<username>/untimeout", methods=["POST"])
 def untimeout_room_member(room_id, username):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1954,7 +2195,7 @@ def untimeout_room_member(room_id, username):
 @app.route("/chat/<int:room_id>/visibility", methods=["POST"])
 def toggle_room_visibility(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1976,7 +2217,7 @@ def toggle_room_visibility(room_id):
 @app.route("/chat/<int:room_id>/slowmode", methods=["POST"])
 def set_slow_mode(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -1990,7 +2231,7 @@ def set_slow_mode(room_id):
         return "방 설정을 변경할 권한이 없습니다.", 403
 
     try:
-        seconds = max(0, int(request.form.get("seconds", 0)))
+        seconds = min(MAX_SLOW_MODE_SECONDS, max(0, int(request.form.get("seconds", 0))))
     except ValueError:
         seconds = 0
 
@@ -2002,7 +2243,7 @@ def set_slow_mode(room_id):
 @app.route("/chat/<int:room_id>/roles", methods=["POST"])
 def create_room_role(room_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -2015,7 +2256,7 @@ def create_room_role(room_id):
         conn.close()
         return "역할을 관리할 권한이 없습니다.", 403
 
-    name = request.form.get("name", "").strip()
+    name = request.form.get("name", "").strip()[:20]
     if not name:
         conn.close()
         return redirect(url_for("room_members", room_id=room_id))
@@ -2035,7 +2276,7 @@ def create_room_role(room_id):
 @app.route("/chat/<int:room_id>/roles/<int:role_id>/update", methods=["POST"])
 def update_room_role(room_id, role_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -2055,7 +2296,7 @@ def update_room_role(room_id, role_id):
         conn.close()
         return "역할을 찾을 수 없습니다.", 404
 
-    name = request.form.get("name", "").strip() or role["name"]
+    name = request.form.get("name", "").strip()[:20] or role["name"]
     color = request.form.get("color", role["color"]).strip()
     if not HEX_COLOR_RE.match(color):
         color = role["color"]
@@ -2076,7 +2317,7 @@ def update_room_role(room_id, role_id):
 @app.route("/chat/<int:room_id>/roles/<int:role_id>/delete", methods=["POST"])
 def delete_room_role(room_id, role_id):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -2098,7 +2339,7 @@ def delete_room_role(room_id, role_id):
 @app.route("/chat/<int:room_id>/members/<username>/role", methods=["POST"])
 def assign_room_member_role(room_id, username):
     if "user_id" not in session:
-        return redirect("/login")
+        return login_redirect()
 
     conn = get_db()
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
@@ -2145,6 +2386,8 @@ def assistant():
     }
 
     if request.method == "POST":
+        if "user_id" not in session:
+            return login_redirect()
         action = request.form.get("action")
 
         if action == "meal":
@@ -2188,8 +2431,10 @@ def assistant():
 
 @app.route("/assistant/chat", methods=["POST"])
 def assistant_chat():
+    if "user_id" not in session:
+        return jsonify({"reply": "로그인한 뒤에 반장에게 물어볼 수 있어요."}), 401
     user_key = get_user_key()
-    message = request.form.get("message", "").strip()
+    message = request.form.get("message", "").strip()[:MAX_CHAT_LEN]
 
     if not message:
         return jsonify({"reply": "질문을 입력하세요."}), 400
@@ -2206,6 +2451,14 @@ def assistant_chat():
 def csrf_error(_):
     return "보안 토큰이 만료되었거나 올바르지 않아요. 페이지를 새로고침한 뒤 다시 시도하세요.", 400
 
+@app.errorhandler(404)
+def not_found(_):
+    return "페이지를 찾을 수 없습니다.", 404
+
+@app.errorhandler(405)
+def method_not_allowed(_):
+    return "잘못된 방식의 요청입니다.", 405
+
 @app.errorhandler(413)
 def too_large(_):
     return "사진 용량이 너무 커요(5MB 이하). 뒤로 가서 작은 사진을 올려주세요.", 413
@@ -2219,7 +2472,7 @@ def handle_connect():
 
 def broadcast_online_users(room_id_str):
     usernames = sorted(set(room_online_users[room_id_str].values()))
-    emit("online_users", {"usernames": usernames}, room=room_id_str)
+    socketio.emit("online_users", {"usernames": usernames}, to=room_id_str)
 
 @socketio.on("join")
 def handle_join(data):
@@ -2281,6 +2534,21 @@ def chat_send_error(conn, room, username):
     return None
 
 
+def message_payload(row):
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "content": row["content"],
+        "image": url_for("static", filename=row["image"]) if row["image"] else None,
+        "created_at": row["created_at"],
+    }
+
+
+def can_pin_messages(room, perms):
+    """1:1 DM 은 두 사람 모두, 일반 방은 메시지 관리 권한이 있는 사람만 고정할 수 있다."""
+    return bool(room["is_dm"]) or perms["manage_messages"]
+
+
 def post_chat_message(conn, room, content, image=None):
     """메시지를 저장하고 방 전체에 보낸 뒤, @멘션·DM 알림을 보낸다. 소켓/HTTP 양쪽에서 쓴다."""
     username = session["username"]
@@ -2308,13 +2576,7 @@ def post_chat_message(conn, room, content, image=None):
         )
     conn.commit()
 
-    socketio.emit("new_message", {
-        "id": row["id"],
-        "username": row["username"],
-        "content": row["content"],
-        "image": url_for("static", filename=row["image"]) if row["image"] else None,
-        "created_at": row["created_at"],
-    }, to=str(room["id"]))
+    socketio.emit("new_message", message_payload(row), to=str(room["id"]))
 
 
 @socketio.on("send_message")
@@ -2322,8 +2584,11 @@ def handle_send_message(data):
     if "user_id" not in session:
         return
     room_id = (data or {}).get("room_id")
-    content = (data or {}).get("content", "").strip()
+    content = str((data or {}).get("content") or "").strip()
     if not content or room_id is None:
+        return
+    if len(content) > MAX_CHAT_LEN:
+        emit("send_error", {"message": f"메시지는 {MAX_CHAT_LEN}자 이하로 보내주세요."})
         return
 
     conn = get_db()
@@ -2364,10 +2629,15 @@ def handle_delete_message(data):
 
     room_id = message["room_id"]
     conn.execute("DELETE FROM chat_messages WHERE id = ?", (message_id,))
+    unpinned = conn.execute(
+        "UPDATE chat_rooms SET pinned_message_id = NULL WHERE id = ? AND pinned_message_id = ?", (room_id, message_id)
+    ).rowcount
     delete_uploaded_file(message["image"])
     conn.commit()
     conn.close()
     emit("message_deleted", {"id": message_id}, room=str(room_id))
+    if unpinned:
+        emit("message_unpinned", {}, room=str(room_id))
 
 @socketio.on("pin_message")
 def handle_pin_message(data):
@@ -2383,7 +2653,8 @@ def handle_pin_message(data):
 
     room_id = message["room_id"]
     room = conn.execute("SELECT * FROM chat_rooms WHERE id = ?", (room_id,)).fetchone()
-    if room is None or not can_access_room(conn, room, session["username"]):
+    if room is None or not can_access_room(conn, room, session["username"]) \
+            or not can_pin_messages(room, get_effective_permissions(conn, room, session["username"])):
         conn.close()
         return
 
@@ -2394,7 +2665,7 @@ def handle_pin_message(data):
     emit("message_pinned", {
         "id": message["id"],
         "username": message["username"],
-        "content": message["content"],
+        "content": message["content"] or "📷 사진",
         "created_at": message["created_at"],
     }, room=str(room_id))
 
@@ -2412,7 +2683,8 @@ def handle_unpin_message(data):
         conn.close()
         return
 
-    if not can_access_room(conn, room, session["username"]):
+    if not can_access_room(conn, room, session["username"]) \
+            or not can_pin_messages(room, get_effective_permissions(conn, room, session["username"])):
         conn.close()
         return
 
@@ -2426,7 +2698,7 @@ def handle_set_announcement(data):
     if "user_id" not in session:
         return
     room_id = (data or {}).get("room_id")
-    content = (data or {}).get("content", "").strip()
+    content = str((data or {}).get("content") or "").strip()[:MAX_CHAT_LEN]
     if room_id is None or not content:
         return
 

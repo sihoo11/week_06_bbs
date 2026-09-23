@@ -18,8 +18,8 @@
             <option value="{{ c }}" {% if post.category == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="title" placeholder="제목을 입력하세요" value="{{ post.title }}" required>
-        <textarea name="content" placeholder="내용을 입력하세요" required>{{ post.content }}</textarea>
+        <input type="text" name="title" maxlength="100" placeholder="제목을 입력하세요" value="{{ post.title }}" required>
+        <textarea name="content" maxlength="10000" placeholder="내용을 입력하세요" required>{{ post.content }}</textarea>
 
         {% if post.image %}
             <img src="{{ url_for('static', filename=post.image) }}" alt="현재 첨부 이미지" class="post-image" style="max-height: 180px;">
