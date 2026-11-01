@@ -1,6 +1,10 @@
 import os
 from datetime import datetime, timedelta
 import requests
+from dotenv import load_dotenv
+
+# MCP 서버처럼 다른 폴더에서 실행돼도 이 파일 옆의 .env를 읽는다
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 BASE_URL = "https:" + "//open.neis.go.kr/hub"
 TIMEOUT = 5
@@ -32,7 +36,12 @@ def get_school_code(school_name: str):
 
 def get_today_meal(office_code: str, school_code: str):
     """오늘 급식 데이터를 딕셔너리로 반환"""
-    today = datetime.now().strftime("%Y%m%d")
+    return get_meal(office_code, school_code, datetime.now().strftime("%Y%m%d"))
+
+
+def get_meal(office_code: str, school_code: str, date: str):
+    """지정한 날짜(YYYYMMDD 또는 YYYY-MM-DD)의 급식 데이터를 딕셔너리로 반환"""
+    today = date.replace("-", "")
     res = _get(
         "mealServiceDietInfo",
         ATPT_OFCDC_SC_CODE=office_code,
